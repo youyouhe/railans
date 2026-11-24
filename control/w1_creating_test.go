@@ -1,7 +1,7 @@
 package main
 
 // W1 creating 期结构化错误码用例(TC-W1 组)。
-// 依据:内部方案文档 §1 + 配套测试用例文档 §1（内部正本，未随公开版发布）。
+// 依据:内部方案文档（未随公开版发布） §1 + 配套测试用例文档 §1。
 // 复用 fixes_test.go 既有 helper(fakeSession/stubIncus/newTestControl/putBox)与
 // vm_node_failure_test.go 的 testPubKey——只复用不修改(两文件均在禁碰清单)。
 // 断言 JSON 的用例经渲染纯函数 renderNewErrorJSON,输出层不 mock SSH 会话,

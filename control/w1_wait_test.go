@@ -1,7 +1,7 @@
 package main
 
 // TC-wait 组用例(W1 §1.10 wait 命令增补)。
-// 依据:内部方案文档 §1.10 + 配套测试用例文档 §2（内部正本，未随公开版发布）。
+// 依据:内部方案文档（未随公开版发布） §1.10 + 配套测试用例文档 §2。
 // 复用 fixes_test.go helper(fakeSession/stubIncus/newTestControl/putBox)与
 // vm_node_failure_test.go 的 testPubKey——只复用不修改。
 // 被测对象:waiters.go(waitRegistry/waitForBox/waitOwnerCheck)与

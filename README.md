@@ -253,4 +253,4 @@ cd control && go vet ./... && go test ./...
 
 ## 8. License
 
-暂未定。占位——正式公开前由维护者确定（候选：Apache-2.0 / MIT）。
+[MIT](LICENSE) © 2026 youyouhe
