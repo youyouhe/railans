@@ -14,6 +14,11 @@ type NodeConfig struct {
 	Address string `yaml:"address"`
 	Subnet  string `yaml:"subnet"`
 	Gateway string `yaml:"gateway"`
+	// per-node 静态上限（内部任务单 Phase 1）：该节点可同时存在的箱数
+	// （全状态计数，含 creating/stopped/deleting，与 CountByNode 同口径）。
+	// 0/缺省 = 不设节点上限，仅全局 limits.max_boxes 生效（向后兼容：
+	// 无 max_boxes 的旧 config 照常启动）；配了动态余量地板后此字段是保底闸。
+	MaxBoxes int `yaml:"max_boxes"`
 }
 
 type VMConfig struct {
@@ -145,6 +150,9 @@ func (c *Config) validate() error {
 		seen[n.Name] = true
 		if net.ParseIP(n.Address) == nil || net.ParseIP(n.Gateway) == nil {
 			return fmt.Errorf("node %s: invalid address or gateway", n.Name)
+		}
+		if n.MaxBoxes < 0 {
+			return fmt.Errorf("node %s: max_boxes must be >= 0 (0 = no per-node limit)", n.Name)
 		}
 		_, ipnet, err := net.ParseCIDR(n.Subnet)
 		if err != nil {

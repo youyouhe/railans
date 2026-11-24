@@ -25,19 +25,29 @@ storage_driver: "lvm"
 # SSH 数据面端口池，每台 box 一个
 port_range: [22000, 22999]
 
+# nodes[].max_boxes：per-node 静态上限——该节点可同时存在的箱数（全状态计数）。
+#   0/缺省 = 不设节点上限（仅全局 limits.max_boxes 生效，旧 config 兼容）。
+#   调度是双闸：静态上限之外还有动态余量地板（调度时实时探测 CPU/内存余量，
+#   详见 docs/architecture.md §8）。配了动态地板后，静态上限是保底
+#   （探测失败时兜底），日常调度以实时余量为准。
+#   建议值按真实集群画像（每箱 2C/2G，CPU 是稀缺维度，2C 小节点防过载）：
+#   107 机 3 / 221 机 2 / 239 机 2 / 入口 2。
 nodes:
   - name: node1
     address: "192.168.1.11"
     subnet: "10.10.1.0/24"
     gateway: "10.10.1.1"
+    # max_boxes: 2
   - name: node2
     address: "192.168.1.12"
     subnet: "10.10.2.0/24"
     gateway: "10.10.2.1"
+    # max_boxes: 3
   - name: node3
     address: "192.168.1.13"
     subnet: "10.10.3.0/24"
     gateway: "10.10.3.1"
+    # max_boxes: 3
 
 vm:
   cpus: 2

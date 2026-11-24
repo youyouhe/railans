@@ -164,10 +164,46 @@ Incus `--vm` 的启动成本：首次 ~10-20s（cloud-init + agent），之后�
 
 | 需求 | 做法 |
 |---|---|
-| 更多节点 | 改 `config.yaml` 的 `nodes`，新节点跑 `network`，控制面自动按 box 数选节点 |
+| 更多节点 | 改 `config.yaml` 的 `nodes`（或 `add-node` 一条命令），控制面按静态上限+实时余量双闸选节点（见 §8） |
 | 高可用 | keepalived 把 `192.168.1.10` VIP 漂到 node1/2，两边都跑 railans（state 需共享或改 Postgres） |
 | 模板缓存 | 预建 `dev-base-node2`/`dev-base-node3`，避免跨节点拉镜像 |
 | 计量 | 在 `proxy.pipe` 里记录连接时长/字节数 |
 | Web 控制台 | 复用 `Store`，加 HTTP handler |
 | fork | `incus copy box-a box-a-fork --instance-only` |
+
+## 8. 调度：per-node 静态上限 + 动态余量地板
+
+`new` 选节点（pickNode）按三道闸，按序过滤：
+
+1. **VM 故障冷却**：launch 报「不支持 VM」的节点退避 30 分钟（内存态，重启清零）。
+2. **per-node 静态上限**：`nodes[].max_boxes`——该节点可同时存在的箱数
+   （全状态计数，含 creating/stopped/deleting，与 CountByNode 同口径）。
+   0/缺省 = 不设节点上限，仅全局 `limits.max_boxes` 生效（旧 config 向后兼容）。
+3. **动态余量地板**：调度时实时探测。总量经 `incus query --target <node> /1.0/resources`
+   （等价 REST `GET /1.0/resources?target=<node>`）；已分配经 `incus list --format json`
+   的 location+limits（展开配置，含 profile 合并值）。**STOPPED 实例不占 CPU/内存，不计入分配**。
+   地板两条：`mem_available ≥ vm.memory + 1GiB 预留`；`cpu_total - vcpu_allocated ≥ vm.cpus`。
+   不满足即跳过并记原因。探测失败/超时（5s）= 该节点余量未知 → 回退仅静态闸并 WARN
+   （探测失败不全局拒建）。
+
+全部候选被新闸拒绝时，`no_node_available` 错误并入原因，机器和 agent 都能读：
+`no node available (node3: memory floor 2GiB+1GiB reserve not met (avail 2GiB))`。
+
+`capacity` / `wizard create` 同口径：每节点行增 `cap`（静态上限，null=未设）、
+`mem_avail_gib`、`vcpu_free`（null=余量未知）、`eligible`——agent 建箱前先问 capacity，
+不可落箱节点在 wizard 里点名原因（「CPU 已满，自动改排」语义）。
+
+### 建议值（真实集群画像）
+
+每箱默认 2C/2G（profile dev），**CPU 是稀缺维度**——least-count 摊派会让 2C 小节点过载：
+
+| 节点 | 内存/CPU | 建议 max_boxes |
+|---|---|---|
+| 107 | 30G/2C | 3 |
+| 221 | 7.7G/2C | 2 |
+| 239 | 7.7G/2C | 2 |
+| 入口 | 15G/2C | 2 |
+
+配了动态地板后，静态上限是**保底**（探测失败时兜底），日常调度以实时余量为准。
+`add-node --max-boxes N` 在接线步写入新节点条目的该字段；手工编辑 config 后重启控制面生效。
 

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	gssh "github.com/gliderlabs/ssh"
 )
@@ -20,9 +22,25 @@ func (c *Control) cmdWizard(s gssh.Session, rest []string) {
 		for _, b := range boxes {
 			bvals = append(bvals, *b)
 		}
-		p := capacityJSON(bvals, c.cfg.Limits.MaxBoxes, c.store.CountByNode(), c.cfg.Nodes, c.cfg.PortRange[0], c.cfg.PortRange[1])
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(c.cfg.Nodes)+1)*schedProbeTimeout)
+		defer cancel()
+		counts := c.store.CountByNode()
+		probes := c.schedProbe(ctx, counts)
+		dyn := make(map[string]capNodeDyn, len(probes))
+		for name, r := range probes {
+			dyn[name] = r.Dyn
+		}
+		p := capacityJSON(bvals, c.cfg.Limits.MaxBoxes, counts, c.cfg.Nodes, c.cfg.PortRange[0], c.cfg.PortRange[1], dyn)
 		fmt.Fprintln(s, "向导：创建 box")
 		fmt.Fprintf(s, "当前余量: %s\n", string(p))
+		fmt.Fprintln(s, "调度口径: eligible=true 的节点才落箱（静态上限 cap + 实时余量 mem_avail_gib/vcpu_free 双闸；余量未知=仅静态闸）")
+		for _, n := range c.cfg.Nodes {
+			if r := probes[n.Name]; !r.Dyn.Eligible {
+				// 「node2 CPU 已满，自动改排 node1」语义让 agent 可读：不可落箱节点
+				// 点名原因，new 会自动改排到 eligible 节点
+				fmt.Fprintf(s, "  %s: %s → 不可落箱，调度自动改排\n", n.Name, r.Reason)
+			}
+		}
 		fmt.Fprintln(s, "1. ssh -p 2229 ops@"+c.cfg.ControlHost+" new   （阻塞约 90-120 秒，超时设 300s）")
 		fmt.Fprintln(s, "2. 完成后返回 JSON：name/port/ip/expires")
 		fmt.Fprintln(s, "3. 数据面连接: ssh -p <port> dev@"+c.cfg.ControlHost)

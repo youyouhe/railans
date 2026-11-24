@@ -364,26 +364,54 @@ func (c *Control) cmdList(s gssh.Session, fp string, flags map[string]bool) {
 	_ = w.Flush()
 }
 
-// cmdCapacity：agent 建箱决策的前置查询（余量/分布）
+// cmdCapacity：agent 建箱决策的前置查询（余量/分布，双闸动态口径）
 func (c *Control) cmdCapacity(s gssh.Session) {
+	// 探测预算：清单一次 + 每候选节点一次 query（各 5s 上限）；整段再兜底
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(len(c.cfg.Nodes)+1)*schedProbeTimeout)
+	defer cancel()
 	boxes := c.store.AllBoxes()
 	bvals := make([]Box, 0, len(boxes))
 	for _, b := range boxes {
 		bvals = append(bvals, *b)
 	}
-	out := capacityJSON(bvals, c.cfg.Limits.MaxBoxes, c.store.CountByNode(), c.cfg.Nodes, c.cfg.PortRange[0], c.cfg.PortRange[1])
+	counts := c.store.CountByNode()
+	dyn := c.capacityDyn(ctx, counts)
+	out := capacityJSON(bvals, c.cfg.Limits.MaxBoxes, counts, c.cfg.Nodes, c.cfg.PortRange[0], c.cfg.PortRange[1], dyn)
 	fmt.Fprintln(s, string(out))
 }
 
-// capacityJSON 纯函数：从箱记录/上限/节点清单计算余量分布（可测）。
-func capacityJSON(boxes []Box, maxBoxes int, perNode map[string]int, nodes []NodeConfig, portLo, portHi int) []byte {
+// capacityDyn 探针结论 → capacityJSON 渲染源（cmdCapacity/wizard 同源）。
+func (c *Control) capacityDyn(ctx context.Context, counts map[string]int) map[string]capNodeDyn {
+	probes := c.schedProbe(ctx, counts)
+	dyn := make(map[string]capNodeDyn, len(probes))
+	for name, r := range probes {
+		dyn[name] = r.Dyn
+	}
+	return dyn
+}
+
+// capacityJSON 纯函数：从箱记录/上限/节点清单/动态探针计算余量分布（可测）。
+// 每节点行：cap=per-node 静态上限（null=未设，仅全局上限生效）；
+// mem_avail_gib/vcpu_free=实时余量（null=探测失败余量未知）；
+// eligible=双闸通过（余量未知时仅静态闸口径）。
+func capacityJSON(boxes []Box, maxBoxes int, perNode map[string]int, nodes []NodeConfig, portLo, portHi int, dyn map[string]capNodeDyn) []byte {
 	type nodeRow struct {
 		Node  string `json:"node"`
 		Boxes int    `json:"boxes"`
+		Cap   *int   `json:"cap"`
+		capNodeDyn
 	}
 	nodeRows := make([]nodeRow, 0, len(nodes))
 	for _, n := range nodes {
-		nodeRows = append(nodeRows, nodeRow{n.Name, perNode[n.Name]})
+		row := nodeRow{Node: n.Name, Boxes: perNode[n.Name]}
+		if n.MaxBoxes > 0 {
+			capv := n.MaxBoxes
+			row.Cap = &capv
+		}
+		if d, ok := dyn[n.Name]; ok {
+			row.capNodeDyn = d
+		}
+		nodeRows = append(nodeRows, row)
 	}
 	out, _ := json.MarshalIndent(struct {
 		BoxesTotal int       `json:"boxes_total"`
@@ -628,12 +656,18 @@ func (c *Control) ensureBox(ctx context.Context, s gssh.Session, fp string, pk s
 		return nil, newBoxError("limit_per_ip_day", fmt.Sprintf("daily creation limit reached for %s", clientIP), "", false, 0)
 	}
 
-	node := c.pickNode()
+	node, reasons := c.pickNodeReasons(ctx)
 	if node == nil {
 		if blocked := c.vmBlockedSummary(time.Now()); blocked != "" {
 			return nil, newBoxError("no_vm_node_available", fmt.Sprintf("no VM-capable node available (blocked: %s)", blocked), "", true, 0)
 		}
-		return nil, newBoxError("no_node_available", "no node available", "", true, 0)
+		// 双闸全空且清单为空 = 旧裸文案逐字不变；新闸拒绝原因并入括号形态
+		// （如 `no node available (node3: static cap 3 reached (boxes 3))`）。
+		msg := "no node available"
+		if len(reasons) > 0 {
+			msg = fmt.Sprintf("no node available (%s)", strings.Join(reasons, "; "))
+		}
+		return nil, newBoxError("no_node_available", msg, "", true, 0)
 	}
 	// Hold the allocation lock until the box is recorded, so a concurrent
 	// `new` cannot hand out the same IP/port.
@@ -762,25 +796,118 @@ func (c *Control) destroy(ctx context.Context, b *Box) error {
 	return nil
 }
 
-func (c *Control) pickNode() *NodeConfig {
-	counts := c.store.CountByNode()
-	now := time.Now()
-	c.vmFailMu.Lock()
-	defer c.vmFailMu.Unlock()
-	var best *NodeConfig
+// capNodeDyn 每节点动态口径（capacityJSON 渲染源）：指针字段 nil = 余量未知
+// （探测失败/超时回退），eligible 届时仅按静态闸口径。
+type capNodeDyn struct {
+	MemAvailGiB *float64 `json:"mem_avail_gib"`
+	VCPUFree    *int     `json:"vcpu_free"`
+	Eligible    bool     `json:"eligible"`
+}
+
+// schedProbeResult 单节点双闸结论：Dyn 供 capacity/wizard 渲染，Reason 供
+// pickNode 拒绝说明（新闸才有；vmFail 冷却另有摘要形态）。
+type schedProbeResult struct {
+	Dyn    capNodeDyn
+	Reason string
+}
+
+// schedProbe 全节点双闸探针（pickNode/capacity/wizard 同源口径，内部任务单）：
+// 静态上限（per-node max_boxes）+ 动态余量地板（nodeEligible）逐节点判定。
+// 实例清单全集群拉一次按 location 分桶；探测失败/超时 = 该节点余量未知 →
+// mem/vcpu 置 nil、eligible 按静态闸、记 WARN（探测失败不全局拒建）。
+func (c *Control) schedProbe(ctx context.Context, counts map[string]int) map[string]schedProbeResult {
+	out := make(map[string]schedProbeResult, len(c.cfg.Nodes))
+	// 静态闸先行：候选全空就不拉实例清单（上限打满时 probe 快路径）
+	var cands []*NodeConfig
 	for i := range c.cfg.Nodes {
 		n := &c.cfg.Nodes[i]
-		if until, ok := c.vmFailUntil[n.Name]; ok {
-			if now.Before(until) {
-				continue
-			}
-			delete(c.vmFailUntil, n.Name)
+		r := schedProbeResult{Dyn: capNodeDyn{Eligible: true}}
+		if n.MaxBoxes > 0 && counts[n.Name] >= n.MaxBoxes {
+			r.Dyn.Eligible = false
+			r.Reason = fmt.Sprintf("static cap %d reached (boxes %d)", n.MaxBoxes, counts[n.Name])
+		}
+		out[n.Name] = r
+		if r.Dyn.Eligible {
+			cands = append(cands, n)
+		}
+	}
+	if len(cands) == 0 {
+		return out
+	}
+	insts, err := schedListInstances(ctx, c.incus)
+	if err != nil {
+		c.logger.Printf("WARN: incus list failed, all nodes headroom unknown (falling back to static cap only): %v", err)
+		return out
+	}
+	byNode := map[string][]schedInstance{}
+	for _, it := range insts {
+		byNode[it.Location] = append(byNode[it.Location], it)
+	}
+	for _, n := range cands {
+		r := out[n.Name]
+		stats, err := fetchNodeStats(ctx, c.incus, n.Name, byNode[n.Name])
+		if err != nil {
+			c.logger.Printf("WARN: node %s headroom unknown (falling back to static cap only): %v", n.Name, err)
+			out[n.Name] = r
+			continue
+		}
+		mem := stats.MemAvailableGiB
+		vfree := stats.CPUTotal - stats.VCPUAllocated
+		r.Dyn.MemAvailGiB = &mem
+		r.Dyn.VCPUFree = &vfree
+		ok, why := nodeEligible(stats, byNode[n.Name], c.cfg.VM, schedDefaultFloors)
+		if !ok {
+			r.Dyn.Eligible = false
+			r.Reason = why
+		}
+		out[n.Name] = r
+	}
+	return out
+}
+
+// pickNode 老签名薄包装：仅取选中节点（vm_node_failure 等既有测试锚零漂移）。
+func (c *Control) pickNode() *NodeConfig {
+	n, _ := c.pickNodeReasons(context.Background())
+	return n
+}
+
+// pickNodeReasons 选节点，并给出新闸拒绝原因（内部任务单）。
+// 候选按序过闸：vmFail 冷却（既有，内存态）→ per-node 静态上限（Phase 1）
+// → 动态余量地板（Phase 2）。选中口径不变：余量箱数最少优先，平票取 config 顺序。
+// 拒绝原因只收新闸（vmFail 冷却有 vmBlockedSummary 自己的摘要形态），
+// 由 ensureBox 并入 no_node_available 文案；vmFail 锁内只做快照，
+// 动态探测不加锁进行（慢 IO 不持锁）。
+func (c *Control) pickNodeReasons(ctx context.Context) (*NodeConfig, []string) {
+	counts := c.store.CountByNode()
+	c.vmFailMu.Lock()
+	blocked := make(map[string]time.Time, len(c.vmFailUntil))
+	now := time.Now()
+	for name, until := range c.vmFailUntil {
+		if now.Before(until) {
+			blocked[name] = until
+		} else {
+			delete(c.vmFailUntil, name)
+		}
+	}
+	c.vmFailMu.Unlock()
+	probes := c.schedProbe(ctx, counts)
+	var best *NodeConfig
+	var reasons []string
+	for i := range c.cfg.Nodes {
+		n := &c.cfg.Nodes[i]
+		if _, ok := blocked[n.Name]; ok {
+			continue
+		}
+		p := probes[n.Name]
+		if !p.Dyn.Eligible {
+			reasons = append(reasons, n.Name+": "+p.Reason)
+			continue
 		}
 		if best == nil || counts[n.Name] < counts[best.Name] {
 			best = n
 		}
 	}
-	return best
+	return best, reasons
 }
 
 // vmFailWindow is how long a node stays out of the rotation after rejecting a

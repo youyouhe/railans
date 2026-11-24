@@ -2442,7 +2442,8 @@ subcmd_verify_nft() {
 #                        hostname 场景执行期按「集群对端路由 src」推导——INFRA_NET
 #                        教训：hysteria 分流下默认路由可能走隧道，禁用默认路由推导）
 #     --pool-dir <路径>  新节点 dir 存储池路径（缺省 /var/lib/incus/storage-pools/default）
-#     --max-boxes N      仅记为建议值（控制面 per-node 配额暂无字段，跳过并注明，不改全局）
+#     --max-boxes N      写入 config 新节点条目的 max_boxes 字段（per-node 静态上限；
+#                        不传=不写该字段，节点无独立上限）
 #     --skip-verify      跳过第 7 步验收箱（healthcheck --all 仍跑）
 #     --from-step N      从第 N 步续跑（失败断点续跑用；1-8；前序步骤全部幂等）
 #     --yes              缺省干跑只打印计划；--yes 才执行（deploy-remote 同款语义）
@@ -2460,7 +2461,8 @@ subcmd_verify_nft() {
 #   4 镜像分发：incus image copy dev-base local: --target <name>（镜像统一
 #     local 构建+copy 分发；构建走 build-base-image-local.sh）
 #   5 控制面接线：config.yaml nodes 安全追加（备份+追加到临时文件+结构校验+原子替换
-#     +重启控制面——systemd unit 在跑就 systemctl restart，ctl.sh 形态 loud fail 指路 runbook §4.1）
+#     +重启控制面——systemd unit 在跑就 systemctl restart，ctl.sh 形态 loud fail 指路
+#     runbook §4.1；--max-boxes 在此写入新节点条目的 max_boxes 字段，内部任务单接线）
 #   6 老节点路由补全：每老节点 ROUTES 追加新成员 /24 via 新机后重跑 network（WAN 从
 #     该节点到其他成员的对端路由 dev 推导，同 INFRA_NET 教训；kit 先 rsync 刷新）
 #   7 验收：healthcheck --all 全绿 +（无 --skip-verify 时）验收箱：new --json →
@@ -2593,8 +2595,10 @@ addnode_config_has_node() {
 
 # YAML 结构校验：nodes 块中该成员条目的 address/subnet 与期望一致且 gateway 字段在位。
 # 值比对用精确等值（引号两形态都认），不做正则点转义（免引号语义漂移）。
+# 第 5 参 want_mb（可选）：给了就要求条目含 `max_boxes: N`（引号两形态都认）；
+# 不给则忽略条目里的 max_boxes 行（不传 --max-boxes 的重跑对已接线 config 幂等）。
 addnode_config_validate() {
-  local file="$1" name="$2" addr="$3" subnet="$4" blk='' line='' a=0 s=0 g=0 gv=''
+  local file="$1" name="$2" addr="$3" subnet="$4" want_mb="${5:-}" blk='' line='' a=0 s=0 g=0 gv='' mb=0
   blk="$(awk -v n="$name" '
     /^nodes:[[:space:]]*(#.*)?$/ { inb = 1; next }
     inb && /^[A-Za-z_]/ { exit }
@@ -2620,17 +2624,25 @@ addnode_config_validate() {
         g=1
       fi
     fi
+    if [[ -n "$want_mb" && ( "$line" == "    max_boxes: \"${want_mb}\"" || "$line" == "    max_boxes: ${want_mb}" ) ]]; then
+      mb=1
+    fi
   done <<<"$blk"
   if [[ "$a" == 1 && "$s" == 1 && "$g" == 1 ]]; then
+    if [[ -n "$want_mb" && "$mb" != 1 ]]; then
+      return 1
+    fi
     return 0
   fi
   return 1
 }
 
 # 安全追加（文件→文件，不原地）：src 读，dst 写（含新成员条目，插在 nodes 块末行后）。
+# 第 7 参 maxboxes（可选）：给了就在条目里追加 `max_boxes: N` 行（per-node 静态
+# 上限，内部任务单接线；不传=不写该字段，条目形态与旧版逐字一致）。
 # 已有同名 → 非 0（幂等返回）；无 nodes 块 → 非 0。校验由调用方对 dst 复核后才替换。
 addnode_config_append() {
-  local src="$1" dst="$2" name="$3" addr="$4" subnet="$5" gw="$6"
+  local src="$1" dst="$2" name="$3" addr="$4" subnet="$5" gw="$6" maxboxes="${7:-}"
   local insat=0
   addnode_config_has_node "$src" "$name" && return 1
   insat="$(awk '
@@ -2650,6 +2662,9 @@ addnode_config_append() {
     printf '    address: "%s"\n' "$addr"
     printf '    subnet: "%s"\n' "$subnet"
     printf '    gateway: "%s"\n' "$gw"
+    if [[ -n "$maxboxes" ]]; then
+      printf '    max_boxes: %s\n' "$maxboxes"
+    fi
     tail -n "+$((insat + 1))" "$src"
   } >"$dst"
   return 0
@@ -2952,11 +2967,11 @@ an_step5_config() {
   fi
   echo "  配置文件: ${cfg}"
   local gw="${AN_SUBNET%.*}.1"   # 同 AN_GW 推导（%.* 去尾段得 .1）
-  if addnode_config_validate "$cfg" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET"; then
+  if addnode_config_validate "$cfg" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET" "${AN_MAXBOXES}"; then
     hc_pass "config 已含 ${AN_NAME} 且值一致（幂等跳过追加）"
   else
     if addnode_config_has_node "$cfg" "$AN_NAME"; then
-      an_fail_step 5 5 "config 已有 ${AN_NAME} 条目但 address/subnet 不匹配——人工核对 ${cfg} 后续跑"
+      an_fail_step 5 5 "config 已有 ${AN_NAME} 条目但 address/subnet/max_boxes 与期望不一致——人工核对 ${cfg} 后续跑"
     fi
     local oldn=0 newn=0 tmpf='' bak=''
     oldn="$(addnode_parse_config_nodes "$cfg" | grep -c . || true)"
@@ -2964,7 +2979,7 @@ an_step5_config() {
     if [[ -z "$tmpf" ]]; then
       an_fail_step 5 5 "无法在 ${cfg} 旁创建临时文件（目录不可写且 sudo -n 不可用？）——追加中止，${cfg} 未动"
     fi
-    if ! addnode_config_append "$cfg" "$tmpf" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET" "$gw"; then
+    if ! addnode_config_append "$cfg" "$tmpf" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET" "$gw" "${AN_MAXBOXES}"; then
       rm -f "$tmpf"
       if ((AN_DRY == 1)); then
         hc_warn "nodes 块缺失或形态异常（${cfg}）——执行时第 5 步将在此停住；请人工核对后重跑"
@@ -2977,13 +2992,15 @@ an_step5_config() {
       rm -f "$tmpf"
       an_fail_step 5 5 "追加后节点数校验不过（${oldn}→${newn}；${cfg} 未动）"
     fi
-    if ! addnode_config_validate "$tmpf" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET"; then
+    if ! addnode_config_validate "$tmpf" "$AN_NAME" "${AN_ADDR_RESOLVED}" "$AN_SUBNET" "${AN_MAXBOXES}"; then
       rm -f "$tmpf"
       an_fail_step 5 5 "追加产物结构校验不过（${cfg} 未动）"
     fi
     if ((AN_DRY == 1)); then
       rm -f "$tmpf"
-      echo "  将执行: 备份 ${cfg} → 原子替换（追加 ${AN_NAME}@${AN_ADDR_RESOLVED} ${AN_SUBNET} gw ${gw}）→ 重启控制面（探测 systemd/ctl.sh）"
+      local mbfrag=''
+      [[ -n "${AN_MAXBOXES}" ]] && mbfrag=" max_boxes=${AN_MAXBOXES}"
+      echo "  将执行: 备份 ${cfg} → 原子替换（追加 ${AN_NAME}@${AN_ADDR_RESOLVED} ${AN_SUBNET} gw ${gw}${mbfrag}）→ 重启控制面（探测 systemd/ctl.sh）"
       return 0
     fi
     bak="${cfg}.bak.$(date +%Y%m%d%H%M%S)"
@@ -3144,10 +3161,10 @@ EOF
   else
     echo "  端口池余量: 取不到（capacity 命令失败，不阻断）"
   fi
-  local -a notes=()
   if [[ -n "${AN_MAXBOXES}" ]]; then
-    notes+=("控制面 per-node 配额暂无字段：--max-boxes ${AN_MAXBOXES} 仅记为建议值，未落 config（全局 max_boxes 未改）")
+    echo "  per-node 上限: max_boxes=${AN_MAXBOXES}（已落 config 节点条目；配了动态余量地板后静态上限是保底）"
   fi
+  local -a notes=()
   if [[ "${AN_SKIP_VERIFY}" == 1 ]]; then
     notes+=("已 --skip-verify：未建验收箱，数据面登录/预览/L3 建议人工抽测")
   fi
@@ -3289,7 +3306,7 @@ subcmd_add_node() {
   echo "  成员名:   ${AN_NAME}（VM 网段 ${AN_SUBNET}，网关 ${AN_GW}）"
   echo "  NODE_ADDR: ${AN_ADDR_RESOLVED:-<第 2 步推导>}"
   echo "  dir 池:   ${AN_POOL_DIR}"
-  [[ -n "${AN_MAXBOXES}" ]] && echo "  --max-boxes ${AN_MAXBOXES}: 仅建议值（per-node 配额字段暂无，不落 config）"
+  [[ -n "${AN_MAXBOXES}" ]] && echo "  --max-boxes ${AN_MAXBOXES}: 将写入 config 节点条目 max_boxes 字段（per-node 静态上限；动态地板下是保底）"
   [[ "${AN_SKIP_VERIFY}" == 1 ]] && echo "  --skip-verify: 验收箱段将跳过（healthcheck --all 仍跑）"
   echo
 

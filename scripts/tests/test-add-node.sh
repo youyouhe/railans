@@ -426,6 +426,8 @@ case_an_05() {
   assert_cont "TC-AN-05 追加条目 address 带引号" "    address: \"192.168.1.15\"" "$(cat "$TMP/config.new")"
   assert_cont "TC-AN-05 追加条目 subnet" "    subnet: \"10.10.5.0/24\"" "$(cat "$TMP/config.new")"
   assert_cont "TC-AN-05 追加条目 gateway" "    gateway: \"10.10.5.1\"" "$(cat "$TMP/config.new")"
+  assert_eq "TC-AN-05 不传 max-boxes 条目无 max_boxes 行（旧形态逐字一致）" "0" \
+    "$(grep -c '^    max_boxes' "$TMP/config.new" || true)"
   assert_cont "TC-AN-05 追加插在 nodes 块尾（limits 块仍在其后）" \
     "    gateway: \"10.10.3.1\"
   - name: node5
@@ -433,6 +435,36 @@ case_an_05() {
     subnet: \"10.10.5.0/24\"
     gateway: \"10.10.5.1\"
 limits:" "$(cat "$TMP/config.new")"
+  # 带 --max-boxes 追加（内部任务单接线）：条目尾多一行 max_boxes
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_append "'"$TMP/config.yaml"'" "'"$TMP/config.mb"'" node6 192.168.1.16 10.10.6.0/24 10.10.6.1 6
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  assert_cont "TC-AN-05 带 max_boxes 条目尾行" \
+    "    gateway: \"10.10.6.1\"
+    max_boxes: 6
+limits:" "$(cat "$TMP/config.mb")"
+  # 校验器（第 5 参 want_mb）：带期望→条目须含 max_boxes: N；不带→忽略该行（幂等兼容）
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_validate "'"$TMP/config.mb"'" node6 192.168.1.16 10.10.6.0/24 6
+    addnode_config_validate "'"$TMP/config.mb"'" node6 192.168.1.16 10.10.6.0/24
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  assert_rc "TC-AN-05 校验带期望 6 过" 0 "$?"
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_validate "'"$TMP/config.mb"'" node6 192.168.1.16 10.10.6.0/24 7
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  assert_rc "TC-AN-05 校验期望 7 不过（值不符）" 1 "$?"
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_validate "'"$TMP/config.new"'" node5 192.168.1.15 10.10.5.0/24 6
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  assert_rc "TC-AN-05 校验带期望但条目无 max_boxes 不过" 1 "$?"
   # 校验器：追加产物过、原文件不过、缺 gateway 不过
   bash -c '
     set -euo pipefail
@@ -573,6 +605,7 @@ case_an_08() {
   assert_cont "TC-AN-08 控制面重启（systemd）" "systemctl restart railans" "$(cat "$TMP/call.log")"
   assert_cont "TC-AN-08 config 含 node5 条目" "  - name: node5" "$(cat "$TMP/config.yaml")"
   assert_cont "TC-AN-08 config 含 subnet" "    subnet: \"10.10.5.0/24\"" "$(cat "$TMP/config.yaml")"
+  assert_no "TC-AN-08 不传 --max-boxes 条目不落 max_boxes（旧形态兼容）" "max_boxes: " "$(grep '    max_boxes' "$TMP/config.yaml" 2>/dev/null || true)"
   assert_eq "TC-AN-08 节点数 3→4" "4" "$(bash -c '
     set -euo pipefail
     source "'"$NODE_SCRIPT"'" help >/dev/null
@@ -617,7 +650,7 @@ case_an_09() {
   assert_cont "TC-AN-09 续跑指回 --from-step 7" "--from-step 7 --yes" "$(cat "$TMP/out")"
 }
 
-# ================================================================= TC-AN-10 --skip-verify + --max-boxes（记建议值并注明）
+# ================================================================= TC-AN-10 --skip-verify + --max-boxes（接线落 config 并注明）
 case_an_10() {
   case_setup
   make_config_fixture
@@ -625,14 +658,18 @@ case_an_10() {
   make_shims
   run_addnode "$TMP/out" "$TMP/rc" add-node ops@192.168.1.15 node5 10.10.5.0/24 --yes --skip-verify --max-boxes 6
   local out; out="$(cat "$TMP/out")"
-  assert_rc "TC-AN-10 跳验收 + 建议 quota 全链退出 0" 0 "$(cat "$TMP/rc")"
-  assert_cont "TC-AN-10 计划言明 max-boxes 仅建议值" "--max-boxes 6: 仅建议值（per-node 配额字段暂无，不落 config）" "$out"
+  assert_rc "TC-AN-10 跳验收 + 接线 quota 全链退出 0" 0 "$(cat "$TMP/rc")"
+  assert_cont "TC-AN-10 计划言明 max-boxes 将落 config" \
+    "--max-boxes 6: 将写入 config 节点条目 max_boxes 字段（per-node 静态上限；动态地板下是保底）" "$out"
   assert_cont "TC-AN-10 计划言明验收箱将跳过" "--skip-verify: 验收箱段将跳过" "$out"
   assert_cont "TC-AN-10 healthcheck 仍跑" "3 台检查，0 台有 FAIL" "$out"
   assert_no "TC-AN-10 验收箱未建（无 new --json）" "new --json" "$(cat "$TMP/call.log")"
   assert_no "TC-AN-10 验收箱未建（无 keyscan）" "ssh-keyscan" "$(cat "$TMP/call.log")"
   assert_cont "TC-AN-10 汇总注明跳过验收" "已 --skip-verify：未建验收箱" "$out"
-  assert_cont "TC-AN-10 汇总注明 max-boxes 建议值" "--max-boxes 6 仅记为建议值" "$out"
+  assert_cont "TC-AN-10 汇总注明 per-node 上限已落 config" \
+    "per-node 上限: max_boxes=6（已落 config 节点条目；配了动态余量地板后静态上限是保底）" "$out"
+  assert_cont "TC-AN-10 config 含 node5 条目" "  - name: node5" "$(cat "$TMP/config.yaml")"
+  assert_cont "TC-AN-10 --max-boxes 落节点条目 max_boxes 字段" "    max_boxes: 6" "$(cat "$TMP/config.yaml")"
   assert_no "TC-AN-10 有事项时不得打「无」" "后续手工事项: 无" "$out"
 }
 
@@ -720,6 +757,45 @@ case_an_13() {
   assert_cont "TC-AN-13 add-node 分支接 subcmd_add_node" 'subcmd_add_node "$@"' "$(cat "$NODE_SCRIPT")"
 }
 
+# ================================================================= TC-AN-14 --max-boxes 接线幂等/失配（内部任务单）
+case_an_14() {
+  case_setup
+  make_config_fixture
+  make_json_fixtures
+  make_shims
+  # 现场一：config 已含 node5 条目且 max_boxes=6（上次带 --max-boxes 跑过）→ 同值重跑幂等跳过
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_append "'"$TMP/config.yaml"'" "'"$TMP/config.new"'" node5 192.168.1.15 10.10.5.0/24 10.10.5.1 6 && mv "'"$TMP/config.new"'" "'"$TMP/config.yaml"'"
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  cp "$TMP/config.yaml" "$TMP/config.before"
+  run_addnode "$TMP/out" "$TMP/rc" add-node ops@192.168.1.15 node5 10.10.5.0/24 --yes --skip-verify --max-boxes 6
+  local out; out="$(cat "$TMP/out")"
+  assert_rc "TC-AN-14 同值重跑退出 0" 0 "$(cat "$TMP/rc")"
+  assert_cont "TC-AN-14 同值重跑幂等跳过追加" "config 已含 node5 且值一致（幂等跳过追加）" "$out"
+  assert_eq "TC-AN-14 幂等重跑 config 不重复不改动" "1" "$(grep -c '^  - name: node5$' "$TMP/config.yaml")"
+  cmp -s "$TMP/config.before" "$TMP/config.yaml" \
+    && t_ok "TC-AN-14 幂等重跑 config 逐字节不动" \
+    || t_fail "TC-AN-14 幂等重跑动了 config"
+
+  # 现场二：config 已含 node5 条目但无 max_boxes，--max-boxes 6 重跑 → 失配 loud fail，config 不动
+  bash -c '
+    set -euo pipefail
+    source "$1" help >/dev/null
+    addnode_config_append "'"$TMP/config.yaml"'" "'"$TMP/config.new"'" node6 192.168.1.16 10.10.6.0/24 10.10.6.1 && mv "'"$TMP/config.new"'" "'"$TMP/config.yaml"'"
+  ' runner "$NODE_SCRIPT" >/dev/null 2>&1
+  cp "$TMP/config.yaml" "$TMP/config.before6"
+  run_addnode "$TMP/out" "$TMP/rc" add-node ops@192.168.1.16 node6 10.10.6.0/24 --yes --skip-verify --max-boxes 6
+  out="$(cat "$TMP/out")"
+  assert_rc "TC-AN-14 失配重跑退出 1" 1 "$(cat "$TMP/rc")"
+  assert_cont "TC-AN-14 失配断点在第 5 步" "FAIL 第 5/8 步（控制面接线）" "$out"
+  assert_cont "TC-AN-14 失配点名 max_boxes" "address/subnet/max_boxes 与期望不一致" "$out"
+  cmp -s "$TMP/config.before6" "$TMP/config.yaml" \
+    && t_ok "TC-AN-14 失配重跑 config 未动" \
+    || t_fail "TC-AN-14 失配重跑动了 config"
+}
+
 # ---------------------------------------------------------------- 门禁 + 运行
 if [[ ! -r "$NODE_SCRIPT" ]]; then
   printf 'test-add-node: 找不到被测脚本 %s\n' "$NODE_SCRIPT" >&2
@@ -733,7 +809,7 @@ fi
 printf '%s\n' "== TC-AN 组（scripts/tests/test-add-node.sh，全沙盒垫片不碰真机真集群）=="
 for case_fn in case_an_01 case_an_02 case_an_03 case_an_04 case_an_05 \
                case_an_06 case_an_07 case_an_08 case_an_09 case_an_10 \
-               case_an_11 case_an_12 case_an_13; do
+               case_an_11 case_an_12 case_an_13 case_an_14; do
   "$case_fn"
 done
 cleanup
