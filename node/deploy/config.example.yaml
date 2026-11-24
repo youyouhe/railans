@@ -1,0 +1,76 @@
+listen: ":22"
+
+# 控制面域名（客户端 ssh 这个）
+control_host: "new.box.lan"
+
+# 入口节点的管理 IP（客户端实际连这个）
+public_host: "192.168.1.11"
+
+# 预览域名后缀，Caddy 会生成 box-xxxxxx.<preview_domain>
+preview_domain: "box.lan"
+preview_port: 8080
+
+state_file: "/var/lib/railans/state.json"
+host_key_file: "/var/lib/railans/ssh_host_ed25519_key"
+
+incus_bin: "incus"
+base_image: "dev-base"
+profile: "dev"
+bridge: "br-vm"
+
+# 建集群时用的存储驱动：lvm（推荐，ext4 也能用）/ zfs / dir
+# dir 不支持快照，snapshot 命令会直接提示
+storage_driver: "lvm"
+
+# SSH 数据面端口池，每台 box 一个
+port_range: [22000, 22999]
+
+nodes:
+  - name: node1
+    address: "192.168.1.11"
+    subnet: "10.10.1.0/24"
+    gateway: "10.10.1.1"
+  - name: node2
+    address: "192.168.1.12"
+    subnet: "10.10.2.0/24"
+    gateway: "10.10.2.1"
+  - name: node3
+    address: "192.168.1.13"
+    subnet: "10.10.3.0/24"
+    gateway: "10.10.3.1"
+
+vm:
+  cpus: 2
+  memory: "2GiB"
+  disk: "20GiB"
+
+limits:
+  box_ttl: "168h"
+  idle_stop: "30m"
+  max_boxes: 12
+  max_boxes_per_key: 1
+  max_creates_per_ip_per_day: 3
+
+security:
+  # 改成 `openssl rand -hex 24` 的输出
+  enroll_code: "change-me"
+  require_enroll: true
+  allowed_source_cidr: "192.168.1.0/24"
+
+caddy:
+  conf_path: "/etc/caddy/conf.d/boxes.caddy"
+  reload_cmd: ["systemctl", "reload", "caddy"]
+
+# 按箱注入资产（凭据出镜像）。两键缺省注释态 = 注入关闭
+# （镜像零凭据，由控制面 ensureBox 在交付前 incus file push；配置了但源文件
+# 缺失会 loud fail）。示例值即生产建议值（打包布局资产建议放 /var/lib/railans/assets，
+# 目录先建好 0700）；kit 布局源可驻 /home（systemd unit 为 ProtectHome=read-only，可读）。
+# 本示例保持关闭态。
+# box_assets:
+#   cc_switch_db: /var/lib/railans/assets/cc-switch.db
+#   orca_tar: /var/lib/railans/assets/orca-cli.tar.gz
+
+# 命令级审计（JSONL，一行一事件，0600；轮转自行配 logrotate）。
+# 缺省 = state 同目录 audit.jsonl（无需配置）；显式 "off" 关闭；下例即生产建议值。
+# audit_file: "/var/lib/railans/audit.jsonl"
+

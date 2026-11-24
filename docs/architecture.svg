@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="800" viewBox="0 0 1440 800" font-family="Segoe UI, Microsoft YaHei, Noto Sans SC, sans-serif">
+  <defs>
+    <marker id="aControl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4F5BFF"/>
+    </marker>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0d9488"/>
+    </marker>
+    <marker id="aPreview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#7c3aed"/>
+    </marker>
+    <marker id="aRed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#dc2626"/>
+    </marker>
+    <marker id="aGrey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="800" fill="#f8fafc"/>
+
+  <text x="40" y="48" font-size="26" font-weight="700" fill="#0f172a">railans 架构总览</text>
+  <text x="40" y="74" font-size="12.5" fill="#475569">3 台物理 Ubuntu · Incus 集群 + QEMU/KVM 真 VM · 局域网无 VLAN · 公钥即身份</text>
+
+  <g transform="translate(0,-154)">
+
+  <!-- LAN band -->
+  <rect x="30" y="268" width="1380" height="36" rx="9" fill="#f1f5f9" stroke="#cbd5e1" stroke-dasharray="5 4"/>
+  <text x="720" y="291" text-anchor="middle" font-size="11.5" fill="#475569">局域网 192.168.1.0/24 · 没有 VLAN：二层相通，隔离靠 NAT + 端口池 + nftables</text>
+
+  <!-- client -->
+  <rect x="30" y="356" width="220" height="312" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="46" y="384" font-size="13" font-weight="700" fill="#0f172a">开发者客户端</text>
+  <text x="46" y="406" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#1e293b">ssh new.box.lan</text>
+  <text x="46" y="421" font-size="9.5" fill="#4F5BFF">控制面</text>
+  <text x="46" y="486" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#1e293b">ssh -p 22xxx dev@new.box.lan</text>
+  <text x="46" y="501" font-size="9.5" fill="#0d9488">数据面（端到端 SSH）</text>
+  <text x="46" y="566" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#1e293b">https://box-xxxxxx.box.lan</text>
+  <text x="46" y="581" font-size="9.5" fill="#7c3aed">预览</text>
+  <text x="46" y="638" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#1e293b">DNS → 192.168.1.11</text>
+  <text x="46" y="653" font-size="9.5" fill="#64748b">new.box.lan / *.box.lan</text>
+
+  <!-- client -> entry arrows -->
+  <line x1="250" y1="392" x2="292" y2="392" stroke="#4F5BFF" stroke-width="2" marker-end="url(#aControl)"/>
+  <line x1="250" y1="472" x2="292" y2="472" stroke="#0d9488" stroke-width="2" marker-end="url(#aData)"/>
+  <line x1="250" y1="552" x2="292" y2="552" stroke="#7c3aed" stroke-width="2" marker-end="url(#aPreview)"/>
+  <line x1="250" y1="640" x2="292" y2="640" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#aGrey)"/>
+
+  <!-- entry panel -->
+  <rect x="280" y="320" width="520" height="364" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="300" y="350" font-size="14" font-weight="700" fill="#0f172a">node1 · 192.168.1.11（入口节点）</text>
+  <text x="780" y="350" text-anchor="end" font-size="10" fill="#64748b">Go 控制面 + Caddy + dnsmasq</text>
+
+  <!-- r1 -->
+  <rect x="296" y="356" width="488" height="72" rx="10" fill="#f8faff" stroke="#d7dff0"/>
+  <rect x="296" y="356" width="4" height="72" rx="2" fill="#4F5BFF"/>
+  <text x="314" y="380" font-size="13" font-weight="700" fill="#1e293b">SSH 控制面 :22</text>
+  <text x="314" y="400" font-size="10.5" fill="#334155">公钥认证 · enroll 邀请码 · 每个公钥默认 1 台</text>
+  <text x="314" y="417" font-size="10.5" fill="#64748b">new / ls / info / stop / start / snapshot / share / rm</text>
+
+  <!-- r2 -->
+  <rect x="296" y="436" width="488" height="72" rx="10" fill="#f5fbfb" stroke="#cfe7e6"/>
+  <rect x="296" y="436" width="4" height="72" rx="2" fill="#0d9488"/>
+  <text x="314" y="460" font-size="13" font-weight="700" fill="#1e293b">SSH 端口池 :22000-22999</text>
+  <text x="314" y="480" font-size="10.5" fill="#334155">纯 TCP 转发到 VM:22，SSH 握手端到端，网关不终止</text>
+  <text x="314" y="497" font-size="10.5" fill="#64748b">scp -P · sftp -P · ssh -L/-R · VS Code Remote 原生可用</text>
+
+  <!-- r3 -->
+  <rect x="296" y="516" width="488" height="72" rx="10" fill="#faf7ff" stroke="#e2d7f5"/>
+  <rect x="296" y="516" width="4" height="72" rx="2" fill="#7c3aed"/>
+  <text x="314" y="540" font-size="13" font-weight="700" fill="#1e293b">Caddy :443（内网 CA）</text>
+  <text x="314" y="560" font-size="10.5" fill="#334155">按 Host 反代到 VM:8080，tls internal 签发证书</text>
+  <text x="314" y="577" font-size="10.5" fill="#64748b">未执行 share 前，只允许创建者 IP 访问</text>
+
+  <!-- r4 -->
+  <rect x="296" y="596" width="488" height="72" rx="10" fill="#f8fafc" stroke="#dbe3ee"/>
+  <rect x="296" y="596" width="4" height="72" rx="2" fill="#94a3b8"/>
+  <text x="314" y="620" font-size="13" font-weight="700" fill="#1e293b">dnsmasq :53</text>
+  <text x="314" y="640" font-size="10.5" fill="#334155">new.box.lan 与 *.box.lan 解析到 192.168.1.11</text>
+  <text x="314" y="657" font-size="10.5" fill="#64748b">只监听入口 IP，不与 systemd-resolved 抢 53</text>
+
+  <!-- entry -> cluster arrows -->
+  <line x1="784" y1="392" x2="954" y2="392" stroke="#4F5BFF" stroke-width="2" marker-end="url(#aControl)"/>
+  <text x="869" y="384" text-anchor="middle" font-size="9.5" fill="#4F5BFF">incus launch --vm</text>
+  <line x1="784" y1="472" x2="954" y2="472" stroke="#0d9488" stroke-width="2" marker-end="url(#aData)"/>
+  <text x="869" y="464" text-anchor="middle" font-size="9.5" fill="#0d9488">TCP → VM:22</text>
+  <line x1="784" y1="552" x2="954" y2="552" stroke="#7c3aed" stroke-width="2" marker-end="url(#aPreview)"/>
+  <text x="869" y="544" text-anchor="middle" font-size="9.5" fill="#7c3aed">HTTP → VM:8080</text>
+
+  <!-- cluster panel -->
+  <rect x="960" y="320" width="440" height="488" rx="12" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="980" y="350" font-size="14" font-weight="700" fill="#0f172a">Incus cluster · 3 节点 · 本地存储池</text>
+  <text x="980" y="368" font-size="10" fill="#64748b">入口经管理网 + 静态路由访问各节点 10.10.N.0/24</text>
+
+  <!-- node1 -->
+  <rect x="976" y="380" width="408" height="132" rx="10" fill="#fbfdff" stroke="#dbe3ee"/>
+  <text x="992" y="402" font-size="12.5" font-weight="700" fill="#0f172a">node1 · 192.168.1.11（入口）</text>
+  <text x="1372" y="402" text-anchor="end" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#475569">br-vm 10.10.1.1/24</text>
+  <rect x="992" y="412" width="224" height="88" rx="8" fill="#ecfdf5" stroke="#99f6e4"/>
+  <text x="1004" y="432" font-size="11" font-weight="700" fill="#0f172a">box-a · 10.10.1.10</text>
+  <text x="1004" y="452" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">sshd :22</text>
+  <text x="1004" y="469" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">app :8080</text>
+  <text x="1004" y="486" font-size="9.5" fill="#64748b">独立 host key</text>
+  <circle cx="1236" cy="448" r="2.5" fill="#94a3b8"/><text x="1246" y="452" font-size="9.5" fill="#64748b">本地存储池</text>
+  <circle cx="1236" cy="466" r="2.5" fill="#94a3b8"/><text x="1246" y="470" font-size="9.5" fill="#64748b">nftables NAT</text>
+  <circle cx="1236" cy="484" r="2.5" fill="#94a3b8"/><text x="1246" y="488" font-size="9.5" fill="#64748b">静态路由可达</text>
+
+  <!-- node2 -->
+  <rect x="976" y="520" width="408" height="132" rx="10" fill="#fbfdff" stroke="#dbe3ee"/>
+  <text x="992" y="542" font-size="12.5" font-weight="700" fill="#0f172a">node2 · 192.168.1.12</text>
+  <text x="1372" y="542" text-anchor="end" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#475569">br-vm 10.10.2.1/24</text>
+  <rect x="992" y="552" width="224" height="88" rx="8" fill="#ecfdf5" stroke="#99f6e4"/>
+  <text x="1004" y="572" font-size="11" font-weight="700" fill="#0f172a">box-b · 10.10.2.10</text>
+  <text x="1004" y="592" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">sshd :22</text>
+  <text x="1004" y="609" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">app :8080</text>
+  <text x="1004" y="626" font-size="9.5" fill="#64748b">独立 host key</text>
+  <circle cx="1236" cy="588" r="2.5" fill="#94a3b8"/><text x="1246" y="592" font-size="9.5" fill="#64748b">本地存储池</text>
+  <circle cx="1236" cy="606" r="2.5" fill="#94a3b8"/><text x="1246" y="610" font-size="9.5" fill="#64748b">nftables NAT</text>
+  <circle cx="1236" cy="624" r="2.5" fill="#94a3b8"/><text x="1246" y="628" font-size="9.5" fill="#64748b">静态路由可达</text>
+
+  <!-- node3 -->
+  <rect x="976" y="660" width="408" height="132" rx="10" fill="#fbfdff" stroke="#dbe3ee"/>
+  <text x="992" y="682" font-size="12.5" font-weight="700" fill="#0f172a">node3 · 192.168.1.13</text>
+  <text x="1372" y="682" text-anchor="end" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#475569">br-vm 10.10.3.1/24</text>
+  <rect x="992" y="692" width="224" height="88" rx="8" fill="#ecfdf5" stroke="#99f6e4"/>
+  <text x="1004" y="712" font-size="11" font-weight="700" fill="#0f172a">box-c · 10.10.3.10</text>
+  <text x="1004" y="732" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">sshd :22</text>
+  <text x="1004" y="749" font-size="10" font-family="ui-monospace, Consolas, monospace" fill="#334155">app :8080</text>
+  <text x="1004" y="766" font-size="9.5" fill="#64748b">独立 host key</text>
+  <circle cx="1236" cy="728" r="2.5" fill="#94a3b8"/><text x="1246" y="732" font-size="9.5" fill="#64748b">本地存储池</text>
+  <circle cx="1236" cy="746" r="2.5" fill="#94a3b8"/><text x="1246" y="750" font-size="9.5" fill="#64748b">nftables NAT</text>
+  <circle cx="1236" cy="764" r="2.5" fill="#94a3b8"/><text x="1246" y="768" font-size="9.5" fill="#64748b">静态路由可达</text>
+
+  <!-- key properties -->
+  <rect x="30" y="700" width="900" height="104" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="50" y="726" font-size="12.5" font-weight="700" fill="#0f172a">关键性质</text>
+  <text x="50" y="748" font-size="10.5" fill="#334155">· SSH 端到端：网关只做 io.Copy，host key 由 VM 自己签发，known_hosts 记 [new.box.lan]:22xxx</text>
+  <text x="50" y="767" font-size="10.5" fill="#334155">· 无 VLAN 隔离：VM 在 NAT 后；VM → 10.0.0.0/8 被 nftables drop；入口到各节点 VM 段走静态路由</text>
+  <text x="50" y="786" font-size="10.5" fill="#334155">· 生命周期：30 分钟空闲停机保盘 · 7 天 TTL · 每个公钥默认 1 台 · enroll 邀请码控制准入</text>
+
+  <!-- legend -->
+  <rect x="960" y="830" width="440" height="86" rx="10" fill="#ffffff" stroke="#e2e8f0"/>
+  <line x1="978" y1="854" x2="1012" y2="854" stroke="#4F5BFF" stroke-width="2" marker-end="url(#aControl)"/>
+  <text x="1020" y="858" font-size="9.5" fill="#334155">控制面</text>
+  <line x1="1072" y1="854" x2="1106" y2="854" stroke="#0d9488" stroke-width="2" marker-end="url(#aData)"/>
+  <text x="1114" y="858" font-size="9.5" fill="#334155">数据面</text>
+  <line x1="1166" y1="854" x2="1200" y2="854" stroke="#7c3aed" stroke-width="2" marker-end="url(#aPreview)"/>
+  <text x="1208" y="858" font-size="9.5" fill="#334155">预览</text>
+  <line x1="978" y1="878" x2="1012" y2="878" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#aRed)"/>
+  <text x="1020" y="882" font-size="9.5" fill="#334155">VM → 管理网：nftables drop</text>
+  <line x1="1180" y1="878" x2="1214" y2="878" stroke="#64748b" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#aGrey)"/>
+  <text x="1222" y="882" font-size="9.5" fill="#334155">DNS 查询</text>
+  <text x="978" y="902" font-size="9.5" fill="#64748b">VM → 公网：masquerade 出去；VM ↔ VM：10.10.0.0/16 放行</text>
+  </g>
+</svg>
+

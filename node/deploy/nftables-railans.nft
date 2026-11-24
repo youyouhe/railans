@@ -1,0 +1,70 @@
+#!/usr/sbin/nft -f
+# railans 节点防火墙（由 node/railans-node.sh network 用真实网卡与网段渲染后加载）
+#
+# 占位符：
+#   __WAN__    = 物理上联网卡名（eno1 / enp4s0 / ...）
+#   __MGMT__   = 管理网 CIDR（渲染为 NODE_ADDR 所在 /24，如 192.168.1.0/24）
+#   __GWMESH__ = 本节点网格网关地址（渲染为 SUBNET 的 .1，如 10.10.1.1）
+#
+# 设计目标：
+#   1. VM -> 公网：masquerade（LAN 方向豁免以运行态实测为准，见方案 §2.5）
+#   2. VM <-> VM（10.10.0.0/16）：放行，含跨节点
+#   3. VM -> 管理网 __MGMT__：forward 与 input 两侧都丢（跨节点箱流量源保持 10.10.x，
+#      由 input 侧规则兜住；评审 §3-H1）
+#   4. 网关/其他节点 -> VM：放行（端口转发、Caddy 反代）
+#   5. VM -> 宿主机自身服务：丢弃，白名单除外（W5 门面 4092、跨节点箱数据面端口）
+
+table inet railans {
+    chain input {
+        type filter hook input priority filter; policy accept;
+
+        # 宿主机主动连接 VM 时，VM 的回包必须能回来
+        ct state established,related accept
+
+        # [W5] 本地箱 -> 本节点网格门面（评审 §6-1：必须落 input 链、br-vm drop 之前，
+        #      只动 forward 会漏本地箱）。渲染后即 10.10.1.1（node1）。
+        iifname "br-vm" ip daddr __GWMESH__ tcp dport 4092 accept
+
+        # [H1-允许面] 跨节点箱 -> 本节点数据面端口（proxy 监听端口池，config port_range）
+        iifname "__WAN__" ip saddr 10.10.0.0/16 tcp dport 22000-22999 accept
+
+        # [H1-允许面] 跨节点箱 -> 入口节点网格门面（W5；非入口节点渲染同款规则，无监听不生效）
+        iifname "__WAN__" ip saddr 10.10.0.0/16 ip daddr __GWMESH__ tcp dport 4092 accept
+
+        # [H1-限面] 跨节点箱源（源仍为 10.10.x，LAN 方向无 SNAT——评审口径）：
+        # 除上面白名单端口外，一律拒绝。节点互访源是节点管理网 IP，不命中本条（见 §2.4）
+        iifname "__WAN__" ip saddr 10.10.0.0/16 drop
+
+        # VM 不能访问宿主机上的 incus / caddy admin / 其它本机服务
+        iifname "br-vm" drop
+    }
+
+    chain forward {
+        type filter hook forward priority filter; policy accept;
+
+        # 管理侧主动连箱（数据面代理/L3 桥接/预览反代）的回包必须能回来：
+        # 命中 established 的流量先放行，箱「新发起」的连接仍落到下方 MGMT drop（H1 语义不变）。
+        # 窗口热修（2026-11-24）：缺此条时跨节点箱的所有回连被 H1 drop 误杀。
+        ct state established,related accept
+
+        # VM 之间互通（同节点 + 跨节点）
+        iifname "br-vm" ip daddr 10.10.0.0/16 accept
+        iifname "__WAN__" ip daddr 10.10.0.0/16 accept
+
+        # 节点/入口访问 VM
+        iifname "__WAN__" oifname "br-vm" accept
+
+        # VM 不能扫描管理网（真实网段，占位符化；与下条 10/8 兜底并存）
+        iifname "br-vm" ip daddr __MGMT__ drop
+
+        # 规划期兜底保留：10.0.0.0/8 仍 drop（网段再迁移时不再静默失效）
+        iifname "br-vm" ip daddr 10.0.0.0/8 drop
+    }
+
+    chain postrouting {
+        # masquerade 只能位于 nat 型链（filter 型 base 链 nft 拒载：内核硬校验链类型）
+        type nat hook postrouting priority srcnat; policy accept;
+
+        ip saddr 10.10.0.0/16 oifname "__WAN__" masquerade
+    }
+}

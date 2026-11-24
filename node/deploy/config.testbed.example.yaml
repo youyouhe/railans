@@ -1,0 +1,36 @@
+# 本机单节点验证配置模板（真实文件放在自己的工作目录，如 ~/railans-testbed/config.yaml）
+# 与 node/deploy/config.example.yaml 的差异：单节点、dir 池、控制面让位系统 sshd 用 2229、
+# caddy reload 走 admin API 脚本（测试期免 root）、老 CPU 需 hotplug 限制。
+listen: ":2229"
+control_host: "ctl.test"
+preview_domain: "box.lan"
+preview_port: 8080
+state_file: "/home/<user>/railans-testbed/state.json"   # 按实际用户目录改
+host_key_file: "/home/<user>/railans-testbed/hostkey_ed25519"
+incus_bin: "incus"
+base_image: "dev-base"
+profile: "dev"
+bridge: "br-vm"
+storage_driver: "dir"
+port_range: [22100, 22199]
+nodes:
+  - name: node1
+    address: "192.168.1.11"
+    subnet: "10.10.1.0/24"
+    gateway: "10.10.1.1"
+limits:
+  box_ttl: "168h"
+  idle_stop: "30m"
+  max_boxes: 4
+  max_boxes_per_key: 1
+  max_creates_per_ip_per_day: 10
+security:
+  enroll_code: "openssl rand -hex 24 生成"
+  require_enroll: true
+caddy:
+  conf_path: "/etc/caddy/conf.d/boxes.caddy"
+  reload_cmd: ["/home/<user>/railans-testbed/caddy-reload.sh"]
+# 注：
+# box_assets 两键不配置 = 按箱注入关闭（testbed 行为不变）；
+# audit_file "off" = testbed 安静模式（缺省会在 state 同目录写 audit.jsonl）
+audit_file: "off"

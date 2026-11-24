@@ -1,0 +1,244 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 920" role="img" aria-label="railans 架构：控制命令在入口网关终结处理；SSH 数据面被原样转发到 VM（端到端加密）；HTTPS 预览由 Caddy 终结 TLS 后反代 VM:8080；VM 主动外联在节点 nftables 被裁决；box 生命周期由 state.json 驱动，含 P1-P3 三个自愈路径">
+  <title>railans 架构 — 三条路径 · 隔离裁决 · 生命周期</title>
+  <style>
+    :root { --bg:#f6f7f9; --fg:#16212e; --panel:#ffffff; --line:#c9d3de; --muted:#5e6e80;
+            --ctl:#2f5fd4; --data:#0e7f74; --prev:#7a4bd0; --drop:#c2372f; --ok:#2f7d4f; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#10151b; --fg:#dce4ee; --panel:#171e26; --line:#2c3947; --muted:#8d9cae;
+              --ctl:#7ea3f0; --data:#54cec2; --prev:#b39af1; --drop:#e57a72; --ok:#6fd08c; }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; fill: var(--fg); }
+    .mono { font-family: ui-monospace, "SF Mono", Consolas, "Courier New", monospace; }
+    .m  { fill: var(--muted); }
+    .tc { fill: var(--ctl); }  .td { fill: var(--data); }
+    .tp { fill: var(--prev); } .tr { fill: var(--drop); } .to { fill: var(--ok); }
+    .panel { fill: var(--panel); stroke: var(--line); }
+    .zone  { fill: none; stroke: var(--line); }
+    .s-ctl  { stroke: var(--ctl);  fill: none; }
+    .s-data { stroke: var(--data); fill: none; }
+    .s-prev { stroke: var(--prev); fill: none; }
+    .s-gray { stroke: var(--muted); fill: none; }
+    .s-drop { stroke: var(--drop); stroke-dasharray: 5 4; fill: none; }
+    .band { fill: none; stroke: var(--drop); stroke-dasharray: 6 4; }
+    .f-ctl { fill: var(--ctl); }  .f-data { fill: var(--data); }
+    .f-prev{ fill: var(--prev); } .f-gray { fill: var(--muted); }
+    .f-drop{ fill: var(--drop); }
+  </style>
+  <defs>
+    <marker id="m-ctl"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-ctl"/></marker>
+    <marker id="m-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-data"/></marker>
+    <marker id="m-prev" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-prev"/></marker>
+    <marker id="m-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-gray"/></marker>
+    <marker id="m-drop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="f-drop"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="920" fill="var(--bg)"/>
+  <text x="32" y="28" font-size="12.5" font-weight="700">railans 架构 — 路径在哪终结 · 隔离靠什么裁决 · 状态怎么走（含 P1–P3 修复）</text>
+
+  <!-- legend -->
+  <line x1="48"  y1="48" x2="74"  y2="48" class="s-ctl"  stroke-width="3"/>
+  <text x="80"  y="52" font-size="10.5" class="m">控制（网关终结并处理）</text>
+  <line x1="232" y1="48" x2="258" y2="48" class="s-data" stroke-width="3"/>
+  <text x="264" y="52" font-size="10.5" class="m">数据面（端到端 SSH）</text>
+  <line x1="408" y1="48" x2="434" y2="48" class="s-prev" stroke-width="3"/>
+  <text x="440" y="52" font-size="10.5" class="m">预览（Caddy 终结 TLS）</text>
+  <line x1="588" y1="48" x2="614" y2="48" class="s-drop" stroke-width="1.6"/>
+  <text x="620" y="52" font-size="10.5" class="m">drop（nftables 裁决）</text>
+  <line x1="764" y1="48" x2="790" y2="48" class="s-gray" stroke-width="1.6"/>
+  <text x="796" y="52" font-size="10.5" class="m">NAT 出网</text>
+
+  <!-- ===== client zone ===== -->
+  <rect x="32" y="76" width="184" height="520" rx="12" class="zone"/>
+  <text x="48" y="104" font-size="13" font-weight="700">客户端</text>
+
+  <rect x="44" y="124" width="160" height="84" rx="8" class="panel"/>
+  <rect x="44" y="124" width="3" height="84" rx="1.5" class="f-ctl"/>
+  <text x="56" y="150" font-size="11" class="mono">ssh new.box.lan</text>
+  <text x="56" y="168" font-size="11" class="mono">new / enroll</text>
+  <text x="56" y="188" font-size="10" class="m">公钥=身份 · 邀请码闸门</text>
+
+  <rect x="44" y="232" width="160" height="84" rx="8" class="panel"/>
+  <rect x="44" y="232" width="3" height="84" rx="1.5" class="f-data"/>
+  <text x="56" y="258" font-size="11" class="mono">ssh -p 22xxx</text>
+  <text x="56" y="276" font-size="11" class="mono">dev@new.box.lan</text>
+  <text x="56" y="296" font-size="10" class="m">scp / sftp / -L 原生</text>
+
+  <rect x="44" y="340" width="160" height="84" rx="8" class="panel"/>
+  <rect x="44" y="340" width="3" height="84" rx="1.5" class="f-prev"/>
+  <text x="56" y="366" font-size="11" class="mono">https://box-x.</text>
+  <text x="56" y="384" font-size="11" class="mono">box.lan</text>
+  <text x="56" y="404" font-size="10" class="m">VM 里 $PORT=8080</text>
+
+  <text x="48" y="462" font-size="10" class="m">known_hosts 记 VM 自己的</text>
+  <text x="48" y="478" font-size="10" class="m">host key @ [host]:22xxx</text>
+  <text x="48" y="502" font-size="10" class="m">一个公钥 = 一台 box</text>
+  <text x="48" y="518" font-size="10" class="m">指纹 SHA256 = 身份</text>
+
+  <!-- ===== entry node zone ===== -->
+  <rect x="288" y="76" width="456" height="520" rx="12" class="zone"/>
+  <text x="304" y="104" font-size="13" font-weight="700">入口节点（生产任选一台；示例 = node1）</text>
+
+  <!-- railans box -->
+  <rect x="304" y="120" width="340" height="252" rx="10" class="panel"/>
+  <text x="320" y="146" font-size="13" font-weight="700">railans 控制面 · Go 单进程</text>
+
+  <circle cx="328" cy="168" r="3" class="f-ctl"/>
+  <text x="340" y="172" font-size="11.5" class="mono">:22 SSH server</text>
+  <text x="340" y="188" font-size="10" class="m">公钥认证 · enroll 邀请码 · 每 key 一台</text>
+
+  <circle cx="328" cy="210" r="3" class="f-data"/>
+  <text x="340" y="214" font-size="11.5" class="mono">TCP forward :22100+</text>
+  <text x="340" y="230" font-size="10" class="m">纯 io.Copy → VM:22 · 不见明文</text>
+
+  <circle cx="328" cy="252" r="3" fill="var(--fg)"/>
+  <text x="340" y="256" font-size="11.5" class="mono">Store · state.json</text>
+  <text x="340" y="272" font-size="10" class="m">temp+rename 原子写 · 单进程互斥</text>
+
+  <circle cx="328" cy="294" r="3" fill="var(--fg)"/>
+  <text x="340" y="298" font-size="11.5" class="mono">Reap · 60s 巡检</text>
+  <text x="340" y="314" font-size="10" class="m">idle 30m 停机 · TTL 7d 销毁</text>
+
+  <circle cx="328" cy="336" r="3" class="f-drop"/>
+  <text x="340" y="340" font-size="11.5">启动 sweep <tspan class="tr" font-weight="700">P1</tspan></text>
+  <text x="340" y="356" font-size="10" class="m">孤儿 creating → 删 VM + 删记录</text>
+
+  <!-- caddy box -->
+  <rect x="304" y="400" width="340" height="84" rx="10" class="panel"/>
+  <text x="320" y="424" font-size="12.5" font-weight="700">Caddy :443 · tls internal</text>
+  <text x="320" y="444" font-size="10.5">按 Host 反代 → VM:8080</text>
+  <text x="320" y="462" font-size="9.5" class="m">未 share：仅创建者 IP，其余 403 · <tspan font-weight="700">P3</tspan> reload 失败→下轮 Sync 重试</text>
+
+  <!-- dnsmasq chip -->
+  <rect x="304" y="500" width="340" height="64" rx="10" class="panel"/>
+  <text x="320" y="524" font-size="12" font-weight="700">dnsmasq :53 · 仅生产</text>
+  <text x="320" y="544" font-size="10" class="m">*.box.lan → 入口 IP · 本机测试用 curl --resolve</text>
+
+  <!-- ===== incus cluster zone ===== -->
+  <rect x="824" y="76" width="384" height="520" rx="12" class="zone"/>
+  <text x="840" y="104" font-size="13" font-weight="700">Incus 集群 · 每节点独立 NAT 网段</text>
+
+  <rect x="840" y="120" width="352" height="208" rx="10" class="panel"/>
+  <text x="856" y="142" font-size="12.5" font-weight="700">node1 = 入口节点（本机）✓ 已实测</text>
+  <text x="856" y="160" font-size="10" class="m">incusd :8443 · dir 池在宿主工作目录</text>
+
+  <rect x="856" y="170" width="320" height="126" rx="8" class="chip"/>
+  <text x="872" y="190" font-size="10.5" class="mono">box-x · QEMU/KVM 真虚机 · eth0←br-vm 10.10.1.1/24</text>
+  <circle cx="876" cy="208" r="3" class="f-data"/>
+  <text x="888" y="212" font-size="11" class="mono">sshd :22</text>
+  <circle cx="876" cy="228" r="3" class="f-prev"/>
+  <text x="888" y="232" font-size="11" class="mono">app :8080（$PORT）</text>
+  <text x="872" y="252" font-size="10" class="m">cloud-init 静态 IP · 独立 host key</text>
+  <text x="872" y="272" font-size="10" class="m">dev-base · 2C/2G/20G · hotplug=4GiB ★老CPU</text>
+
+  <text x="856" y="316" font-size="9.5" class="to">✓ 已实测：控制面 :2229 · enroll / 命令路径 · P1–P3 单测 5/5</text>
+
+  <text x="840" y="340" font-size="10" class="m">生产节点（待部署 · 镜像自动跨节点同步）</text>
+  <rect x="840"  y="348" width="104" height="64" rx="8" class="panel"/>
+  <text x="892"  y="374" font-size="12" font-weight="700" text-anchor="middle">107 主力</text>
+  <text x="892"  y="394" font-size="9.5" class="m" text-anchor="middle">30G · AMD 48-bit</text>
+  <rect x="956"  y="348" width="104" height="64" rx="8" class="panel"/>
+  <text x="1008" y="374" font-size="12" font-weight="700" text-anchor="middle">221</text>
+  <text x="1008" y="394" font-size="9.5" class="m" text-anchor="middle">7.7G · AMD</text>
+  <rect x="1072" y="348" width="104" height="64" rx="8" class="panel"/>
+  <text x="1124" y="374" font-size="12" font-weight="700" text-anchor="middle">239</text>
+  <text x="1124" y="394" font-size="9.5" class="m" text-anchor="middle">7.7G · AMD</text>
+
+  <!-- nftables band -->
+  <rect x="840" y="432" width="352" height="116" rx="10" class="band"/>
+  <text x="856" y="456" font-size="12" font-weight="700" class="tr">nftables · inet railans（每节点）</text>
+  <text x="856" y="478" font-size="10.5" class="mono tr">VM → 10.0.0.0/8  → drop</text>
+  <text x="856" y="496" font-size="10.5" class="mono tr">VM → 宿主 input → drop</text>
+  <text x="856" y="514" font-size="10.5" class="mono">VM ↔ VM 10.10/16 → accept</text>
+  <text x="856" y="532" font-size="10.5" class="mono m">出网 → masquerade</text>
+
+  <!-- internet chip -->
+  <rect x="840" y="556" width="180" height="36" rx="8" class="panel"/>
+  <text x="856" y="579" font-size="10.5" class="m">公网（NAT 后面）</text>
+
+  <!-- ===== crossing arrows ===== -->
+  <!-- A1 control: client -> railans -->
+  <line x1="216" y1="166" x2="302" y2="172" class="s-ctl" stroke-width="2" marker-end="url(#m-ctl)"/>
+  <text x="260" y="158" font-size="10" class="tc" text-anchor="middle">:22 命令</text>
+
+  <!-- A2 control: railans -> incusd -->
+  <line x1="644" y1="170" x2="838" y2="156" class="s-ctl" stroke-width="1.75" marker-end="url(#m-ctl)"/>
+  <text x="742" y="134" font-size="10" class="tc" text-anchor="middle">incus launch --vm</text>
+  <text x="742" y="148" font-size="10" class="tc" text-anchor="middle">exec · file push</text>
+
+  <!-- A3 data: client forward -> VM:22 -->
+  <line x1="644" y1="222" x2="852" y2="222" class="s-data" stroke-width="2.5" marker-end="url(#m-data)"/>
+  <text x="750" y="212" font-size="10" class="td" text-anchor="middle">io.Copy → VM:22（端到端）</text>
+
+  <!-- A4a preview: client -> caddy -->
+  <line x1="216" y1="386" x2="302" y2="434" class="s-prev" stroke-width="2" marker-end="url(#m-prev)"/>
+  <text x="256" y="412" font-size="10" class="tp" text-anchor="middle">:443</text>
+
+  <!-- A4b preview: caddy -> VM:8080 -->
+  <path d="M 644 442 C 710 442, 810 310, 852 250" class="s-prev" stroke-width="2" marker-end="url(#m-prev)"/>
+  <text x="748" y="356" font-size="10" class="tp" text-anchor="middle">反代 VM:8080</text>
+
+  <!-- drop connector: VM -> rules -->
+  <path d="M 1176 282 L 1196 282 L 1196 430" class="s-drop" stroke-width="1.5" marker-end="url(#m-drop)"/>
+
+  <!-- masquerade: band -> internet -->
+  <path d="M 1150 532 L 1196 532 L 1196 568 L 1028 568" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <text x="1108" y="560" font-size="9.5" class="m" text-anchor="middle">NAT 出网</text>
+
+  <!-- ===== lifecycle strip ===== -->
+  <rect x="32" y="632" width="1176" height="256" rx="12" class="zone"/>
+  <text x="48" y="660" font-size="13" font-weight="700">box 生命周期 · state.json 驱动</text>
+  <text x="48" y="678" font-size="10" class="m">Reap 每 60s 巡检 · 创建在 createMu 互斥锁内分配 IP/端口</text>
+
+  <rect x="64"  y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="124" y="718" font-size="12" font-weight="700" text-anchor="middle">new 请求</text>
+  <text x="124" y="734" font-size="9.5" class="m" text-anchor="middle">SSH 会话触发</text>
+
+  <rect x="204" y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="264" y="718" font-size="12" font-weight="700" text-anchor="middle" class="mono">creating</text>
+  <text x="264" y="734" font-size="9.5" class="m" text-anchor="middle">预留 IP / 端口</text>
+
+  <rect x="344" y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="404" y="718" font-size="12" font-weight="700" text-anchor="middle" class="mono">running</text>
+  <text x="404" y="734" font-size="9.5" class="m" text-anchor="middle">VM 运行中</text>
+
+  <rect x="484" y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="544" y="718" font-size="12" font-weight="700" text-anchor="middle" class="mono">stopped</text>
+  <text x="544" y="734" font-size="9.5" class="m" text-anchor="middle">停机保盘</text>
+
+  <rect x="624" y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="684" y="718" font-size="12" font-weight="700" text-anchor="middle" class="mono tr">deleting</text>
+  <text x="684" y="734" font-size="9.5" class="m" text-anchor="middle"><tspan class="tr" font-weight="700">P2</tspan> 待重试</text>
+
+  <rect x="764" y="700" width="120" height="44" rx="8" class="panel"/>
+  <text x="824" y="718" font-size="12" font-weight="700" text-anchor="middle" class="mono m">destroyed</text>
+  <text x="824" y="734" font-size="9.5" class="m" text-anchor="middle">VM + 记录清除</text>
+
+  <rect x="1000" y="700" width="150" height="44" rx="8" class="panel"/>
+  <text x="1075" y="718" font-size="12" font-weight="700" text-anchor="middle">控制面重启</text>
+  <text x="1075" y="734" font-size="9.5" class="m" text-anchor="middle">启动时执行 sweep</text>
+
+  <text x="204" y="766" font-size="9.5" class="m">失败 → 删记录 · 端口/IP 归还</text>
+  <text x="1000" y="776" font-size="9.5" class="m"><tspan class="tc" font-weight="700">P1</tspan> 启动 sweep：孤儿 creating 清扫</text>
+  <text x="1000" y="792" font-size="9.5" class="m"><tspan font-weight="700">P3</tspan> · Caddy reload 失败 → 下轮 Sync 重试</text>
+
+  <line x1="184" y1="722" x2="202" y2="722" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <line x1="324" y1="722" x2="342" y2="722" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <line x1="464" y1="712" x2="482" y2="712" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <text x="474" y="694" font-size="10" class="m" text-anchor="middle">idle 30m</text>
+  <line x1="484" y1="732" x2="466" y2="732" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <text x="474" y="760" font-size="10" class="m" text-anchor="middle">再次 new</text>
+
+  <!-- P2 self loop -->
+  <path d="M 664 698 C 664 672, 704 672, 704 698" class="s-drop" stroke-width="1.4" marker-end="url(#m-drop)"/>
+  <text x="684" y="664" font-size="10" class="tr" text-anchor="middle">删除失败 → 保留记录 · reap 重试</text>
+
+  <!-- deleting -> destroyed -->
+  <line x1="744" y1="722" x2="762" y2="722" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+
+  <!-- P1: restart -> destroyed path -->
+  <line x1="998" y1="722" x2="886" y2="722" class="s-ctl" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#m-ctl)"/>
+
+  <!-- TTL curve -->
+  <path d="M 544 746 C 544 804, 800 804, 800 748" class="s-gray" stroke-width="1.5" marker-end="url(#m-gray)"/>
+  <text x="596" y="814" font-size="10" class="m">TTL 7d → destroy()（running 同样适用）</text>
+</svg>

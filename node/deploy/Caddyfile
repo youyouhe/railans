@@ -1,0 +1,8 @@
+{
+  auto_https disable_redirects  # 站点默认还要绑 :80 做跳转；宿主 :80 常被占，直接禁用
+	admin localhost:2019
+}
+
+# railans 生成的每 box 站点
+import /etc/caddy/conf.d/*.caddy
+

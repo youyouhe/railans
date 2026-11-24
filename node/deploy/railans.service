@@ -1,0 +1,39 @@
+# railans SSH 控制面 unit（subcmd_control 负责落前置：railans 用户/目录/polkit）
+# ProtectHome 取 read-only：kit 布局 box_assets 源可驻 /home，
+# =yes 会把 /home 整体置不可读、按箱注入必 loud fail
+[Unit]
+Description=railans SSH control plane
+After=network-online.target snap.incus.daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=railans
+Group=railans
+SupplementaryGroups=incus-admin
+ExecStart=/usr/local/bin/railans -config /etc/railans/config.yaml
+Restart=always
+RestartSec=3
+LimitNOFILE=65535
+
+# 打包路径控制面占 :22（config.example listen ":22"），非特权用户需绑低端口能力
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=yes
+
+ProtectSystem=strict
+ReadWritePaths=/var/lib/railans /etc/caddy/conf.d
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

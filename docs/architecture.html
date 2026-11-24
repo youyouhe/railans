@@ -1,0 +1,97 @@
+<title>railans 架构总览</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+  :root {
+    --bg:#f4f5f7; --fg:#16212e; --muted:#5e6e80; --line:#d4dae2; --card:#ffffff;
+    --ctl:#2f5fd4; --data:#0e7f74; --prev:#7a4bd0; --ok:#2f7d4f; --warn:#a06410;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:#10151b; --fg:#dce4ee; --muted:#8d9cae; --line:#2c3947; --card:#171e26;
+      --ctl:#7ea3f0; --data:#54cec2; --prev:#b39af1; --ok:#6fd08c; --warn:#d9a75a;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg:#10151b; --fg:#dce4ee; --muted:#8d9cae; --line:#2c3947; --card:#171e26;
+    --ctl:#7ea3f0; --data:#54cec2; --prev:#b39af1; --ok:#6fd08c; --warn:#d9a75a;
+    color-scheme: dark;
+  }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 14px/1.65 system-ui, -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+    margin: 0;
+    padding-block: 24px 40px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+  }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  h1 { font-size: 21px; font-weight: 700; margin: 0 0 4px; letter-spacing: .01em; }
+  .sub { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 20px; padding: 0; list-style: none; }
+  .pills li {
+    font-size: 12px; padding: 4px 10px; border: 1px solid var(--line);
+    border-radius: 999px; background: var(--card); white-space: nowrap;
+  }
+  .pills .done::before { content: "✓ "; color: var(--ok); font-weight: 700; }
+  .pills .doing::before { content: "● "; color: var(--warn); font-weight: 700; }
+  .pills .todo::before  { content: "○ "; color: var(--muted); font-weight: 700; }
+  figure { margin: 0; }
+  .figbox { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card); }
+  .figbox img { display: block; width: 100%; min-width: 1000px; height: auto; }
+  figcaption {
+    color: var(--muted); font-size: 13px; line-height: 1.7;
+    padding: 14px 4px 0; max-width: 900px;
+  }
+  section { margin-top: 28px; }
+  h2 { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+  ul.status { margin: 0; padding-left: 1.2em; max-width: 900px; }
+  ul.status li { margin: 6px 0; }
+  ul.status .mark-done { color: var(--ok); font-weight: 700; }
+  ul.status .mark-doing { color: var(--warn); font-weight: 700; }
+  ul.status .mark-todo  { color: var(--muted); font-weight: 700; }
+  code {
+    font-family: ui-monospace, "SF Mono", Consolas, monospace; font-size: 12.5px;
+    background: var(--card); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+  }
+  footer { margin-top: 32px; color: var(--muted); font-size: 12px; }
+</style>
+
+<div class="wrap">
+  <h1>railans 架构总览</h1>
+  <p class="sub">私有 Railway：3 台物理机 · Incus 真 VM · 无 VLAN 局域网 · 公钥即身份 —— 路径在哪终结、隔离在哪裁决、状态怎么走</p>
+
+  <ul class="pills">
+    <li class="done">控制面实测（enroll / 命令 / 回收路径）</li>
+    <li class="done">P1–P3 修复 + 单测 5/5</li>
+    <li class="doing">dev-base 镜像构建（第 5 轮，网络修复后）</li>
+    <li class="todo">全链路验收待跑</li>
+  </ul>
+
+  <figure>
+    <div class="figbox">
+      <img src="architecture-deploy.svg" alt="railans 架构图：客户端经控制面命令、数据面端口转发、Caddy 预览三条路径访问 Incus 集群中的 KVM 虚机；nftables 裁决 VM 外联；底部为生命周期状态机">
+    </div>
+    <figcaption>
+      三条路径各在一跳终结：控制命令在入口 <code>:22</code> 由 Go 进程处理并写入 state.json；SSH
+      数据面只被 <code>io.Copy</code> 原样转发到 <code>VM:22</code>（加密端到端，host key 是 VM
+      自己的）；HTTPS 预览由 Caddy 终结 TLS 后按 Host 反代 <code>VM:8080</code>。VM
+      的主动外联在每节点 nftables 被规则链裁决：管理网与宿主机一律 drop，出网走 masquerade。底部是 box
+      生命周期，<code>P1/P2/P3</code> 是本轮验收补上的三个自愈路径。
+    </figcaption>
+  </figure>
+
+  <section>
+    <h2>实测状态（2026-11-10）</h2>
+    <ul class="status">
+      <li><span class="mark-done">已验证</span> — go vet 0 告警、amd64/arm64 交叉编译、go.sum 离线完整；控制面真实 SSH 冒烟（enroll 错码/对码、ls、new 失败回滚）；P1/P2/P3 五条单元测试全绿；本机 incus 7.6 单节点集群 + Caddy + 端口转发在线。</li>
+      <li><span class="mark-done">已定位并修复</span> — 三条环境级部署坑：Zabbly deb 安装需手动 <code>usermod -aG kvm incus</code>；Intel ≤36 位物理地址 CPU × 集群模式下 incus 默认热插拔预留超发（<code>limits.memory.hotplug=4GiB</code> 解决）；cloud-init <code>set-name</code> 首启改名失败导致 VM 无网络（去 rename 改 <code>match: en*</code>，DNS 换 223.5.5.5/119.29.29.29）。</li>
+      <li><span class="mark-doing">进行中</span> — dev-base 基础镜像第 5 轮构建：VM 已能引导（agent 50s 就绪），修复网络后在装包阶段。</li>
+      <li><span class="mark-todo">待跑</span> — 全链路验收：new 真建 box → SSH 进 VM → 预览 200/403 → stop/start → rm 回收 → P1 崩溃注入；随后输出三节点（107/221/239）生产部署清单。</li>
+    </ul>
+  </section>
+
+  <footer>源文件：docs/architecture-deploy.svg · 验证环境：单节点测试环境</footer>
+</div>
