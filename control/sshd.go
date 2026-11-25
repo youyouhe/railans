@@ -845,7 +845,7 @@ func (c *Control) schedProbe(ctx context.Context, counts map[string]int) map[str
 	}
 	for _, n := range cands {
 		r := out[n.Name]
-		stats, err := fetchNodeStats(ctx, c.incus, n.Name, byNode[n.Name])
+		stats, err := fetchNodeStats(ctx, c.incus, n.Name, byNode[n.Name], c.cfg.VM)
 		if err != nil {
 			c.logger.Printf("WARN: node %s headroom unknown (falling back to static cap only): %v", n.Name, err)
 			out[n.Name] = r

@@ -3,10 +3,12 @@ package main
 // sched.go — 资源感知调度：动态余量地板的数据组装与纯函数闸（内部任务单 Phase 2）。
 //
 // 口径锚（brief 2026-11-25，站长立项）：
-//   - 总量：incus query --target <member> /1.0/resources（等价 REST
-//     GET /1.0/resources?target=<member>）给 CPU/内存总量；
-//   - 已分配：incus list --format json 的 location+limits（展开配置，含 profile
-//     合并的 limits.cpu/limits.memory）；STOPPED 实例不占 CPU/内存，不计入分配；
+//   - 总量：incus query /1.0/resources?target=<member>（REST
+//     GET /1.0/resources，节点经 target URL 参数指定）给 CPU/内存总量；
+//   - 已分配：incus list --format json 的 location+limits；注意 instance config
+//     不展开 profile（继承 profile 的实例 limits.cpu/limits.memory 缺键），缺键
+//     按 vm 规格回退累加（schedAllocated），非空坏串仍报错；STOPPED 实例不占
+//     CPU/内存，不计入分配；
 //   - 地板：mem_available ≥ vm.memory + 预留（schedMemReserveGiB，常量 1GiB）；
 //     cpu_total - vcpu_allocated ≥ vm.cpus；
 //   - 探测失败/超时（5s）= 该节点余量未知 → 回退仅静态闸并记 WARN
@@ -120,22 +122,32 @@ func schedFirstInt(s string) (int, error) {
 }
 
 // schedAllocated 汇总非 STOPPED 实例的 limits（STOPPED 不占 CPU/内存，不计入
-// ——brief 口径锚）。任一非 STOPPED 实例的 limits 缺失/不可解析 → 整体报错：
-// 宁可余量未知回退静态闸，也不悄悄低估占用。
-func schedAllocated(insts []schedInstance) (int, float64, error) {
+// ——brief 口径锚）。fbVCPU/fbMemGiB 是缺键回退值（vm 规格：继承 profile 的实例
+// 在 list JSON 里 limits.cpu/limits.memory 缺键，config 不展开 profile，按本
+// 控制面落箱的标准规格计）：空串/缺键 → 用回退值累加，fail-open 不响；非空但
+// 不可解析 → 整体报错：坏数据要响，宁可余量未知回退静态闸，也不悄悄低估占用。
+func schedAllocated(insts []schedInstance, fbVCPU int, fbMemGiB float64) (int, float64, error) {
 	vcpu := 0
 	mem := 0.0
 	for _, it := range insts {
 		if strings.EqualFold(strings.TrimSpace(it.Status), "stopped") {
 			continue
 		}
-		c, err := schedFirstInt(it.LimitsCPU)
-		if err != nil {
-			return 0, 0, fmt.Errorf("instance %s limits.cpu: %w", it.Name, err)
+		c := fbVCPU
+		if strings.TrimSpace(it.LimitsCPU) != "" {
+			v, err := schedFirstInt(it.LimitsCPU)
+			if err != nil {
+				return 0, 0, fmt.Errorf("instance %s limits.cpu: %w", it.Name, err)
+			}
+			c = v
 		}
-		g, err := schedParseGiB(it.LimitsMemory)
-		if err != nil {
-			return 0, 0, fmt.Errorf("instance %s limits.memory: %w", it.Name, err)
+		g := fbMemGiB
+		if strings.TrimSpace(it.LimitsMemory) != "" {
+			v, err := schedParseGiB(it.LimitsMemory)
+			if err != nil {
+				return 0, 0, fmt.Errorf("instance %s limits.memory: %w", it.Name, err)
+			}
+			g = v
 		}
 		vcpu += c
 		mem += g
@@ -151,11 +163,13 @@ func nodeEligible(stats *NodeStats, insts []schedInstance, vm VMConfig, floors s
 	if stats == nil {
 		return true, ""
 	}
+	// vm 规格既当新箱需求，也当缺键实例的 limits 回退值（同一口径，见
+	// schedAllocated）；不可解析 = 需求与回退都未知 → 放行（与探测失败同语义）。
 	memNeed, err := schedParseGiB(vm.Memory)
 	if err != nil {
 		return true, ""
 	}
-	vcpuAlloc, memUsed, err := schedAllocated(insts)
+	vcpuAlloc, memUsed, err := schedAllocated(insts, vm.CPUs, memNeed)
 	if err != nil {
 		return true, ""
 	}
@@ -171,8 +185,9 @@ func nodeEligible(stats *NodeStats, insts []schedInstance, vm VMConfig, floors s
 	return true, ""
 }
 
-// schedListInstances 读集群实例清单（incus list --format json，含展开 limits）。
-// 与 incus.List（对账字段）不共用：调度需要 profile 合并后的 limits.cpu/limits.memory，
+// schedListInstances 读集群实例清单（incus list --format json）。instance
+// config 不展开 profile：继承 profile 的实例 limits.cpu/limits.memory 缺键
+// （空串），由 schedAllocated 按 vm 规格回退。与 incus.List（对账字段）不共用，
 // 且 incus.go 本波禁碰。
 func schedListInstances(ctx context.Context, inc *Incus) ([]schedInstance, error) {
 	out, err := inc.run(ctx, schedProbeTimeout, "list", "--format", "json")
@@ -201,11 +216,14 @@ func schedListInstances(ctx context.Context, inc *Incus) ([]schedInstance, error
 	return insts, nil
 }
 
-// fetchNodeStats 组装单节点余量画像：总量经 incus query --target（等价 REST
-// GET /1.0/resources?target=<member>），分配经调用方传入的该节点实例清单
+// fetchNodeStats 组装单节点余量画像：总量经 incus query 的 target URL 参数
+// （/1.0/resources?target=<member>；query 子命令不支持 --target 旗标），
+// 分配经调用方传入的该节点实例清单
 // （schedListInstances 全集群拉一次后按 location 分桶，别每节点重拉）。
-func fetchNodeStats(ctx context.Context, inc *Incus, node string, insts []schedInstance) (*NodeStats, error) {
-	out, err := inc.run(ctx, schedProbeTimeout, "query", "--target", node, "/1.0/resources")
+// vm 提供缺键 limits 的回退规格；回退值本身不可解析（vm.memory 坏串）= 余量
+// 未知，报错由调用方回退静态闸。
+func fetchNodeStats(ctx context.Context, inc *Incus, node string, insts []schedInstance, vm VMConfig) (*NodeStats, error) {
+	out, err := inc.run(ctx, schedProbeTimeout, "query", "/1.0/resources?target="+node)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +238,11 @@ func fetchNodeStats(ctx context.Context, inc *Incus, node string, insts []schedI
 	if err := json.Unmarshal([]byte(out), &res); err != nil {
 		return nil, fmt.Errorf("parse resources of %s: %w", node, err)
 	}
-	vcpuAlloc, memUsed, err := schedAllocated(insts)
+	fbMemGiB, err := schedParseGiB(vm.Memory)
+	if err != nil {
+		return nil, fmt.Errorf("vm.memory fallback: %w", err)
+	}
+	vcpuAlloc, memUsed, err := schedAllocated(insts, vm.CPUs, fbMemGiB)
 	if err != nil {
 		return nil, err
 	}

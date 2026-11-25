@@ -155,8 +155,9 @@ func TestNoNodeAvailableMergesStaticCapReasons(t *testing.T) {
 
 // ---- Phase 2：动态余量地板（全部垫片，不碰真机）----
 
-// schedStubIncus 垫片：`query --target … /1.0/resources` 与 `list --format json`
-// 回放罐头 JSON，其余子命令空过。
+// schedStubIncus 垫片：`query /1.0/resources?target=…`（target URL 参数，
+// query 子命令不支持 --target 旗标）与 `list --format json` 回放罐头 JSON，
+// 其余子命令空过。query 非 URL 参数形态（如旧 --target 旗标）直接 exit 1 拒收。
 func schedStubIncus(t *testing.T, resourcesJSON, listJSON string) *Incus {
 	t.Helper()
 	dir := t.TempDir()
@@ -172,7 +173,10 @@ func schedStubIncus(t *testing.T, resourcesJSON, listJSON string) *Incus {
 	script := fmt.Sprintf(`#!/bin/sh
 d='%s'
 case "$1" in
-  query) cat "$d/resources.json" ;;
+  query) case "$2" in
+           /1.0/resources?target=*) cat "$d/resources.json" ;;
+           *) echo "stub: query 须用 target URL 参数, got: $2" >&2; exit 1 ;;
+         esac ;;
   list)  cat "$d/list.json" ;;
 esac
 exit 0
@@ -241,31 +245,50 @@ func TestSchedParseGiB(t *testing.T) {
 	}
 }
 
-// TC-SCHED-ALLOC：分配汇总——STOPPED 不计（brief 口径锚）；range 取下界保守。
+// TC-SCHED-ALLOC：分配汇总——STOPPED 不计（brief 口径锚）；range 取下界保守；
+// 缺键（继承 profile，list JSON 不展开 profile → config 无 limits 键）按回退值
+// （vm 规格）累加 fail-open；显式 limits 优先于回退；非空坏串仍 loud。
 func TestSchedAllocatedSkipsStopped(t *testing.T) {
-	insts := []schedInstance{
-		{"box-a", "Running", "a", "2", "2GiB"},
-		{"box-b", "Stopped", "a", "2", "2GiB"},         // 不计
-		{"box-c", "RUNNING", "a", "2-4", "1073741824"}, // 大写状态 + 裸字节 + range 下界
+	// 组一：无 limits 键 → 用回退值累加。回退 5C/7GiB 故意取与任何显式值无关
+	// 的数，误用显式值或忽略回退都一眼可见。
+	fbInsts := []schedInstance{
+		{"box-a", "Running", "a", "", ""},              // 缺键 → 回退 5C/7GiB
+		{"box-b", "Stopped", "a", "", ""},              // STOPPED 不计
+		{"box-c", "RUNNING", "a", "2-4", "1073741824"}, // 大写状态 + 显式优先 + 裸字节 + range 下界
 	}
-	vcpu, mem, err := schedAllocated(insts)
+	vcpu, mem, err := schedAllocated(fbInsts, 5, 7)
 	if err != nil {
 		t.Fatalf("schedAllocated: %v", err)
 	}
-	if vcpu != 4 { // 2 + 2（range 下界）；STOPPED 的 2 不计
-		t.Fatalf("vcpu = %d, want 4", vcpu)
+	if vcpu != 7 { // 5（box-a 回退）+ 2（range 下界）；STOPPED 的回退 5 不计
+		t.Fatalf("vcpu = %d, want 7", vcpu)
 	}
-	if math.Abs(mem-3) > 1e-9 { // 2GiB + 1GiB；STOPPED 不计
-		t.Fatalf("mem = %v, want 3", mem)
+	if math.Abs(mem-8) > 1e-9 { // 7GiB（box-a 回退）+ 1GiB；STOPPED 不计
+		t.Fatalf("mem = %v, want 8", mem)
 	}
 
-	// 非 STOPPED 实例 limits 缺失 → loud（宁可余量未知，不悄悄低估占用）
-	if _, _, err := schedAllocated([]schedInstance{{"box-x", "Running", "a", "", ""}}); err == nil {
-		t.Fatal("missing limits must error, not silently undercount")
+	// 组二：带显式 limits → 显式优先（4C/4GiB ≠ 回退 5C/7GiB，按显式计）
+	vcpu, mem, err = schedAllocated([]schedInstance{{"box-d", "Running", "a", "4", "4GiB"}}, 5, 7)
+	if err != nil {
+		t.Fatalf("schedAllocated: %v", err)
+	}
+	if vcpu != 4 || math.Abs(mem-4) > 1e-9 {
+		t.Fatalf("explicit limits = %dC/%vGiB, want 4C/4GiB (explicit over fallback)", vcpu, mem)
+	}
+
+	// 非空但不可解析 → loud（坏数据要响，宁可余量未知，不悄悄低估占用）
+	for _, it := range []schedInstance{
+		{"box-x", "Running", "a", "junk", ""},
+		{"box-y", "Running", "a", "", "junk"},
+	} {
+		if _, _, err := schedAllocated([]schedInstance{it}, 5, 7); err == nil {
+			t.Fatalf("instance %s: unparseable limits must error, not silently undercount", it.Name)
+		}
 	}
 }
 
-// TC-SCHED-ELIG：nodeEligible 表驱动——内存地板/CPU 地板/STOPPED 不计/未知放行。
+// TC-SCHED-ELIG：nodeEligible 表驱动——内存地板/CPU 地板/STOPPED 不计/缺键
+// 按回退值计/未知放行。
 func TestNodeEligibleTable(t *testing.T) {
 	vm := VMConfig{CPUs: 2, Memory: "2GiB"}
 	floor1 := schedFloors{MemReserveGiB: 1}
@@ -319,6 +342,13 @@ func TestNodeEligibleTable(t *testing.T) {
 			insts: run2(), vm: vm, floors: floor1, wantOK: true,
 		},
 		{
+			// 缺键 limits（继承 profile）按 vm 规格回退计：4GiB - 2GiB（回退）
+			// = 2GiB < 2GiB+1GiB → 内存地板挂（真实实例形态的闸层回归锚）
+			name: "缺键 limits 按回退值计", stats: &NodeStats{CPUTotal: 2, MemTotalGiB: 4},
+			insts: []schedInstance{{"x", "Running", "n", "", ""}}, vm: vm, floors: floor1,
+			wantOK: false, wantReason: "memory floor 2GiB+1GiB reserve not met",
+		},
+		{
 			name: "实例 limits 不可解析=未知放行", stats: &NodeStats{CPUTotal: 2, MemTotalGiB: 4},
 			insts: []schedInstance{{"x", "Running", "n", "2", "junk"}}, vm: vm, floors: floor1,
 			wantOK: true,
@@ -344,40 +374,68 @@ func TestNodeEligibleTable(t *testing.T) {
 }
 
 // TC-SCHED-FETCH：fetchNodeStats 垫片组装——总量/分配/STOPPED 剔除逐字段核对；
-// 探测失败/垃圾输出 = error（调用方回退静态闸）。
+// 缺键 limits（继承 profile，list JSON 不展开 profile → config 无键，真实实例
+// 形态）按 vm 规格回退，显式 limits 优先于回退；探测失败/垃圾输出/vm 规格
+// 坏串 = error（调用方回退静态闸）。
 func TestFetchNodeStatsStub(t *testing.T) {
 	res := `{"cpu":{"total":2},"memory":{"total":4294967296}}`
+	// 组一：无 limits 键 → 用回退值累加（罐头走真实 JSON 形态，缺键经
+	// schedListInstances 落成空串再回退，journald limits.cpu: missing 事故回归锚）
 	list := `[
-		{"name":"box-a","status":"Running","location":"a","config":{"limits.cpu":"2","limits.memory":"2GiB"}},
+		{"name":"box-a","status":"Running","location":"a","config":{"security.privileged":"0"}},
 		{"name":"box-b","status":"Stopped","location":"a","config":{"limits.cpu":"2","limits.memory":"2GiB"}}
 	]`
 	inc := schedStubIncus(t, res, list)
-	insts := []schedInstance{
-		{Name: "box-a", Status: "Running", Location: "a", LimitsCPU: "2", LimitsMemory: "2GiB"},
-		{Name: "box-b", Status: "Stopped", Location: "a", LimitsCPU: "2", LimitsMemory: "2GiB"},
+	vm := VMConfig{CPUs: 2, Memory: "2GiB"}
+	insts, err := schedListInstances(context.Background(), inc)
+	if err != nil {
+		t.Fatalf("schedListInstances: %v", err)
 	}
-	stats, err := fetchNodeStats(context.Background(), inc, "a", insts)
+	if insts[0].LimitsCPU != "" || insts[0].LimitsMemory != "" {
+		t.Fatalf("missing limits keys must surface as empty strings, got %+v", insts[0])
+	}
+	stats, err := fetchNodeStats(context.Background(), inc, "a", insts, vm)
 	if err != nil {
 		t.Fatalf("fetchNodeStats: %v", err)
 	}
 	if stats.CPUTotal != 2 || math.Abs(stats.MemTotalGiB-4) > 1e-9 {
 		t.Fatalf("totals = %+v, want cpu 2 mem 4GiB", stats)
 	}
-	if math.Abs(stats.MemAvailableGiB-2) > 1e-9 { // 4 - 2（STOPPED 不计）
+	if math.Abs(stats.MemAvailableGiB-2) > 1e-9 { // 4 - 2（box-a 回退 2GiB；STOPPED 不计）
 		t.Fatalf("mem_avail = %v, want 2", stats.MemAvailableGiB)
 	}
-	if stats.VCPUAllocated != 2 {
+	if stats.VCPUAllocated != 2 { // box-a 回退 2C；STOPPED 不计
 		t.Fatalf("vcpu_allocated = %d, want 2", stats.VCPUAllocated)
+	}
+
+	// 组二：带显式 limits → 显式优先（4C/4GiB ≠ 回退 2C/2GiB，按显式计）
+	list2 := `[{"name":"box-c","status":"Running","location":"a","config":{"limits.cpu":"4","limits.memory":"4GiB"}}]`
+	incX := schedStubIncus(t, res, list2)
+	instsX, err := schedListInstances(context.Background(), incX)
+	if err != nil {
+		t.Fatalf("schedListInstances explicit: %v", err)
+	}
+	statsX, err := fetchNodeStats(context.Background(), incX, "a", instsX, vm)
+	if err != nil {
+		t.Fatalf("fetchNodeStats explicit: %v", err)
+	}
+	if statsX.VCPUAllocated != 4 || math.Abs(statsX.MemAvailableGiB) > 1e-9 {
+		t.Fatalf("explicit = vcpu %d avail %v, want vcpu 4 avail 0", statsX.VCPUAllocated, statsX.MemAvailableGiB)
+	}
+
+	// 回退值本身不可解析（vm.memory 坏串）→ error（余量未知回退静态闸）
+	if _, err := fetchNodeStats(context.Background(), inc, "a", insts, VMConfig{CPUs: 2, Memory: "junk"}); err == nil {
+		t.Fatal("bad vm.memory fallback must error")
 	}
 
 	// query 垃圾输出 → 解析 error
 	inc2 := schedStubIncus(t, "not-json", list)
-	if _, err := fetchNodeStats(context.Background(), inc2, "a", insts); err == nil {
+	if _, err := fetchNodeStats(context.Background(), inc2, "a", insts, vm); err == nil {
 		t.Fatal("garbage resources output must error")
 	}
 	// query exit 1 → error
 	inc3 := schedStubIncusFail(t, "query")
-	if _, err := fetchNodeStats(context.Background(), inc3, "a", insts); err == nil {
+	if _, err := fetchNodeStats(context.Background(), inc3, "a", insts, vm); err == nil {
 		t.Fatal("failed query must error")
 	}
 	// list exit 1 → error

@@ -1,0 +1,18 @@
+# orca environmentRecipes 示范条目 —— railans 一次性箱（per-workspace 环境）
+#
+# 用法：把下面 environmentRecipes 段并入你仓库根的 orca.yaml，并把本目录的
+# scripts/（create/suspend/resume/destroy 四个脚本）拷到仓库根的 scripts/ 下，
+# chmod +x 后即可。命令路径按 orca 的 doctor 口径写成仓库相对的 ./ 形态。
+#
+# 前置与验收见同目录 README.md。
+environmentRecipes:
+  - id: railans-box
+    name: railans box (ephemeral)
+    description: >-
+      每 workspace 一只一次性 railans 箱；7 天到期自动销毁（挂起也不豁免），
+      销毁后激活将得到全新空箱；桌面断开 30 分钟后箱自动停机保盘，激活自动拉起。
+      适合可重建的工作区；不可重建的长跑数据不要放箱上。
+    create: ./scripts/create.sh
+    suspend: ./scripts/suspend.sh
+    resume: ./scripts/resume.sh
+    destroy: ./scripts/destroy.sh
