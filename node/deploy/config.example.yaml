@@ -50,7 +50,7 @@ nodes:
     # max_boxes: 3
 
 vm:
-  cpus: 2
+  cpus: 1
   memory: "2GiB"
   disk: "20GiB"
 
